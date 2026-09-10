@@ -86,21 +86,24 @@ trajectory. Four choices are load-bearing:
 
 ## 3. Results
 
-### 3.1 The fully observed case, at a realistic cadence
+### 3.1 A partially observed case
 
-![Parameter recovery with all species observed](assets/nice_fit.png)
+![Parameter recovery from two observed channels](assets/partial_fit.png)
 
-All eight species observed, 86 frames at one every five minutes, 1% measurement
-noise, `alpha`, `beta` and `n` free from a broad prior that started `alpha` 136x
-below its true value. Both restarts converge to the same optimum and recover
-`alpha` to 2.4%, `beta` to 1.1% and `n` to 0.4%, and the fitted trajectory
-tracks the entire 433-minute record (full-horizon normalised MSE 2.8e-3) even
-though training never saw a window longer than two periods. The parameter traces
-show why the curriculum matters: `beta` overshoots to 2.5x truth while `alpha`
-is still climbing out of its initialisation, and the three only settle together
-once the window widens at epoch 250. This is the easy end of the problem - it
-establishes that the estimator and the cadence are not the limitation, so
-failures under partial observation can be attributed to the measurement itself.
+Two of eight species observed - a TetR-fluorophore fusion and the GFP reporter -
+with the other six hidden, each contributing its initial value as an unknown:
+nine free variables against 86 frames at one every five minutes, with 1%
+measurement noise. The kinetic parameters come back close, `alpha` to 7.9% and
+`beta` to 1.5%, but the figure shows what the error table does not. The hidden
+initial values never converge - `p_LacI(0)` and `p_CI(0)` plateau near twice
+their true values in the second panel - and the small residual period error
+accumulates into a visible phase offset, so that by the end of the record the
+reconstructed oscillation leads the true one by a substantial fraction of a
+cycle. The full-horizon error is 0.168 against 0.0028 for the same fit with all
+eight species observed, and `n` is not settled at all: the second restart ended
+on its prior floor. Close parameters and a wrong trajectory is the characteristic
+signature here, and it is why we score panels on restart agreement and
+full-record reproduction rather than on the fitted loss.
 
 ### 3.2 What is measured decides what is recoverable
 

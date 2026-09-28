@@ -60,3 +60,20 @@ def from_minutes(
         The same tensor in model units.
     """
     return t_min / tau_m_min
+
+
+def estimate_period(t: torch.Tensor, x: torch.Tensor) -> float | None:
+    """Mean peak-to-peak interval of ``x``, in model time units.
+
+    Returns None if fewer than two peaks are found, which is the honest
+    answer for a run that is too short or that settled to a steady state.
+    """
+    interior = x[1:-1]
+    is_peak = (interior > x[:-2]) & (interior >= x[2:])
+    # Ignore ripples near the trough: only count peaks in the upper half of
+    # the observed range.
+    is_peak &= interior > 0.5 * (x.max() + x.min())
+    peak_times = t[1:-1][is_peak]
+    if peak_times.numel() < 2:
+        return None
+    return float(torch.diff(peak_times).mean())

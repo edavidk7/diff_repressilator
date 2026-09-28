@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from differentiable_cell.data import RepressilatorParams, RepressilatorState
-from differentiable_cell.helpers import TAU_M_MIN, to_minutes
+from differentiable_cell.helpers import TAU_M_MIN, estimate_period, to_minutes  # noqa: F401  (re-exported)
 from differentiable_cell.model import Repressilator
 from differentiable_cell.run import (
     FIELDS,
@@ -258,23 +258,6 @@ def write_json(path: Path, payload: dict[str, Any]) -> Path:
 # --------------------------------------------------------------------------
 # Analysis and plotting
 # --------------------------------------------------------------------------
-
-
-def estimate_period(t: torch.Tensor, x: torch.Tensor) -> float | None:
-    """Mean peak-to-peak interval of ``x``, in model time units.
-
-    Returns None if fewer than two peaks are found, which is the honest
-    answer for a run that is too short or that settled to a steady state.
-    """
-    interior = x[1:-1]
-    is_peak = (interior > x[:-2]) & (interior >= x[2:])
-    # Ignore ripples near the trough: only count peaks in the upper half of
-    # the observed range.
-    is_peak &= interior > 0.5 * (x.max() + x.min())
-    peak_times = t[1:-1][is_peak]
-    if peak_times.numel() < 2:
-        return None
-    return float(torch.diff(peak_times).mean())
 
 
 def plot_species_panels(

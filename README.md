@@ -1,6 +1,4 @@
-# stochastic-repressilator-inference-benchmark
-
-*A differentiable simulation is all you need. Repressilator identification from sparse reporters.*
+# A differentiable simulation is all you need for repressilator identification from sparse reporters
 
 David Korcak (dkorcak@ethz.ch) · MSc, Department of Computer Science, ETH Zürich
 
@@ -20,9 +18,8 @@ with an identifiability analysis.
 4. [Results](#4-results)
 5. [Side experiments](#5-side-experiments)
 6. [Limitations](#6-limitations)
-7. [Repository layout](#7-repository-layout)
-8. [Reproducing](#8-reproducing)
-9. [References](#9-references)
+7. [Reproducing](#7-reproducing)
+8. [References](#8-references)
 
 ---
 
@@ -80,7 +77,8 @@ Two more details complete the model.
 Altogether the model tracks 15 quantities, called *species*. These are the 3 circuit
 mRNAs, the 3 repressors, and r, D and F for each of the three reporters. Time is measured
 in mRNA lifetimes (one unit is 2.885 min), and protein amounts are measured in units of
-K_M, the amount of repressor that half-represses its promoter.
+K_M, the amount of repressor that half-represses its promoter. This nondimensionalisation
+reduces the symmetric circuit to the four numbers α, α₀, n and β.
 
 ### The equations
 
@@ -127,9 +125,14 @@ We simulate a cell in two ways.
   each molecule, so reactions happen as separate random events. The Gillespie algorithm
   (also called the stochastic simulation algorithm, SSA) simulates exactly this. It
   repeatedly draws at random which reaction happens next and when, with the correct
-  probabilities. We use Ω = K_M = 40 molecules and 30 reactions. The molecule-count
-  scales are chosen so that the average behaviour of the random network (its drift)
-  equals the ODE exactly, and a test checks this.
+  probabilities. The network has 30 reactions. Proteins are counted in units of
+  Ω = K_M = 40 molecules, circuit mRNAs in units of Ωβ/e and reporter mRNAs in units of
+  Ωδ/e, where e is the number of proteins made per transcript. With these scales the
+  drift of the reaction network, divided by the scales, equals the ODE right-hand side
+  exactly, and a test checks this. Relative fluctuations scale as 1/√(copy number), so
+  tens of molecules give strong intrinsic noise. On a limit cycle this noise appears
+  mostly as phase diffusion, which lets the cell drift out of sync with any deterministic
+  trajectory, and as variation in amplitude from one cycle to the next.
 
 ### Simulated microscope
 
@@ -165,17 +168,28 @@ is called backpropagation through time (BPTT), the same technique used to train
 recurrent neural networks. The simulation is written in PyTorch and integrated with
 torchdiffeq [2].
 
-For fitting we use a simple fixed-step RK4 solver with a step of 0.35 model units (about
-1 min, roughly 5 steps per frame). The data are generated with the much more accurate
-`dopri5` solver at tight tolerance. This way the fit is never judged against data made
-by its own solver.
+We discretise first and then optimise. The gradients are the exact gradients of the
+discrete RK4 map, obtained by reverse-mode autodiff through all ~600 solver steps, not by
+the continuous adjoint method. At this horizon and batch size (64 restarts, ~600 steps,
+at most 15 states) storing the computation graph is cheap, and it avoids the adjoint's
+backward re-integration error on an oscillator.
+
+For fitting we use a fixed-step RK4 solver with a step of 0.35 model units (about 1 min,
+roughly 5 steps per frame). The data are generated with adaptive `dopri5` at a relative
+tolerance of 10⁻⁸. Solver error therefore ends up inside the misfit, and we avoid the
+"inverse crime" of fitting data produced by the same discretisation.
 
 ## 3. Fitting the parameters
 
 <p align="center"><img src="assets/method_schematic.png" width="900" alt="Method schematic"></p>
 
-The goal is to find parameter values whose simulated reporter traces match the measured
-ones as closely as possible.
+Each cell is an initial value problem ẋ = f(x, θ) with x ∈ ℝ^(6+3R) for R reporters. We
+observe G frames (every 5 min for 10 h) of C channels, y_{g,c} = h_c(x(t_g)) + ε_{g,c},
+where h_c reads off a reporter's mature fluorophore F or a fused repressor. The unknowns
+are the kinetic parameters θ and the initial condition x₀, so the estimator is
+(θ̂, x̂₀) = argmin L(θ, x₀) over a box. At the Box 1 parameters the system sits on a
+stable limit cycle, so x₀ mostly encodes the cell's phase, and phase is a neutral
+direction of the dynamics. That is why x₀ has to be estimated jointly rather than fixed.
 
 ### What is unknown
 
@@ -203,9 +217,12 @@ value is drawn log-uniformly, so every order of magnitude in the box is equally 
 
 For a species that is measured, the starting value is boxed to its first frame ± 10% of
 that channel's range. This pins down where in its cycle the cell starts. Hidden species
-are free within their box. The optimisation runs in logit coordinates, a change of
-variables that stretches each box onto the whole number line, so no step can ever leave
-its box.
+are free within their box.
+
+Every unknown is optimised in log space through θ = lo + σ(z)(hi − lo), with z
+unconstrained and σ the logistic function. The box is enforced exactly, without
+projection or penalty. Working in log space also puts relative errors on a common scale,
+which matters when α and α₀ differ by three orders of magnitude.
 
 ### Loss function
 
@@ -223,9 +240,12 @@ $$\mathcal{L} = \frac{1}{G\cdot C}\sum_{i=1}^{G\cdot C} H_\delta(r_i)$$
 - We use Adam for 1500 epochs (update steps), and the learning rate (step
   size) follows a cosine curve from 0.05 down to 2.5·10⁻⁴.
 - We use a *curriculum*. The loss first sees only the first 25% of the frames, then the
-  first 50%, then all of them. The reason is that a small error in the period grows into
-  a large error in timing over a long recording. Over the full record that makes the
-  loss almost flat, which leaves gradient descent with no direction to follow.
+  first 50%, then all of them. On a limit cycle a period error ΔT turns into a phase
+  error that grows linearly in time, roughly tΔT/T. Over the full 10 h a modest period
+  mismatch shifts the trajectory by whole cycles. The misfit then becomes nearly flat in
+  the parameters and has spurious minima wherever the model runs a cycle ahead or
+  behind. Fitting the first quarter and half of the record pins the period while phase
+  errors are still small, and the full record then refines it.
 
 ### Restarts
 
@@ -293,10 +313,17 @@ Median results on **Gillespie cells**
 | inverse PINN | 58% | 23% | 16% | 2.2× |
 
 **On ODE cells ours is best on every parameter**, and it is the only method that reaches
-the optimum. The other methods' estimates reproduce the data 64 to 278 times worse. The
-two solver-free methods (MAGI and the PINN) can satisfy their own ODE penalty with
-trajectories that are not true solutions of the ODE. ABC-SMC runs out of simulation
-budget with 10 to 25 unknowns.
+the optimum. The other methods' estimates reproduce the data 64 to 278 times worse.
+
+- MAGI and the PINN are both gradient-matching (collocation) methods. They enforce the
+  ODE only as a soft penalty at collocation points and trade the data fit against the
+  ODE residual. A small residual at every point still allows slow phase drift, so their
+  trajectories are not ODE solutions, and their estimates refit poorly once the ODE is
+  actually integrated.
+- For ABC-SMC the acceptance rate falls roughly exponentially with the dimension of what
+  must match, here 10 to 25 unknowns and a few hundred data points. Within 300k
+  simulations the tolerance never gets small enough to separate the posterior from a
+  broad shell around the data.
 
 **On Gillespie cells the picture is mixed.**
 
@@ -343,10 +370,13 @@ smoothing (1/a = 200, 1/b = 20).
 | DGA, Ω = 5 | 8·10² | 5·10⁸ | 4·10¹⁴ | 1·10⁴⁴ | 4·10⁶⁹ | **2·10¹²⁰** |
 | ODE, same quantity | 0.1 | 0.3 | 0.6 | 0.6 | 2.1 | 0.5 |
 
-The ODE gradient stays around 1, while the DGA gradient explodes to astronomical values
-within an hour, which is less than one period. Each smoothed reaction choice amplifies
-small perturbations a little. The feedback loop compounds this over about 10⁴ events per
-period (a period is about 120 min).
+The ODE sensitivity stays O(1), while the DGA gradient explodes within an hour, which is
+less than one period. The DGA gradient is a product of per-event Jacobians over about 10⁴
+events per period (a period is about 120 min). The smoothed update mixes in the
+stoichiometries of neighbouring reactions through a Gaussian kernel of width b, so each
+event amplifies perturbations a little. In a feedback loop these factors compound, and
+the gradient grows roughly exponentially with the window length (from 6·10³⁸ to 2·10⁸³
+between 29 and 58 min at Ω = 2).
 
 This does not contradict Rijal and Mehta [6]. They fit steady-state *averages*
 (moments) over thousands of cells, for a promoter without feedback, and they point out
@@ -431,12 +461,13 @@ loss over the full record every 25 epochs.
 <p align="center"><img src="assets/restart_curves.png" width="820" alt="Restart curves"></p>
 
 - About half the restarts reach the optimum on ODE cells (24 to 32 of 64). The rest get
-  stuck on flat plateaus (local minima) from about epoch 500 on. More restarts protect
+  stuck on flat plateaus (local minima) from about epoch 500 on. These are consistent
+  with phase-slip minima, fits that run a cycle ahead or behind. More restarts protect
   against this, more epochs do not.
 - **Restarts that reach the same optimum disagree on α.** On configurations with
-  reporters only, α errors range from 2% to 65% at equally good fits. This is the flat
-  valley of §4.4 seen directly. With the fusion configuration the restarts agree (5% to
-  31%).
+  reporters only, α errors range from 2% to 65% at equally good fits. This is the sloppy
+  direction of §4.4 observed empirically. With the fusion configuration the restarts
+  agree (5% to 31%).
 - The best fit settles within about 100 epochs of the curriculum reaching the full
   record (around epoch 1100). The last ~400 epochs change the MSE by less than 0.3%.
 - **The schedule cannot simply be shortened.**
@@ -485,7 +516,7 @@ uv run python experiments/restart_spread.py --workers 3 && uv run python experim
 uv run python experiments/restart_spread.py --workers 3 --epochs 600 --lr-final 1e-5
 ```
 
-## 9. References
+## 8. References
 
 1. Elowitz MB, Leibler S. A synthetic oscillatory network of transcriptional regulators.
    *Nature* 403, 335–338 (2000).

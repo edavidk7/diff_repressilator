@@ -10,7 +10,6 @@ system sizes. The same derivative of the ODE, for comparison, stays O(1-100).
 
 import json
 import math
-from pathlib import Path
 
 import matplotlib
 
@@ -22,8 +21,10 @@ from differentiable_cell import reporters as R
 from differentiable_cell.gillespie import ssa_dga
 from differentiable_cell.reporter_sim import box1_truth, mask, params, simulate_ode, start_state
 
+from common import FIGURES
+
 torch.set_default_dtype(torch.float64)
-OUT = Path(__file__).resolve().parent.parent / "run_results" / "figures"
+OUT = FIGURES
 WINDOWS = (0.5, 1.0, 2.0, 5.0, 10.0, 20.0)
 OMEGAS = (2.0, 5.0)
 

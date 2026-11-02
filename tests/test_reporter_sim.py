@@ -1,11 +1,9 @@
 """The three-reporter model and its data generation."""
 
-
 import pytest
 import torch
 
 from differentiable_cell import reporters as R
-from differentiable_cell.helpers import estimate_period
 from differentiable_cell.reporter_sim import (
     CHANNEL_STATE, DT_FRAME, Camera, box1_truth, generate, mask, params, simulate_ode, simulate_ssa, start_state,
 )
@@ -60,8 +58,10 @@ def test_oscillates_with_expected_period():
     p, m = params(box1_truth()), mask(ALL)
     t = torch.linspace(0, 300, 3001)
     traj = simulate_ode(p, m, start_state(p, m, 0.0), t)
-    period = estimate_period(t, traj[:, 4])
-    assert period is not None and 30 < period < 60, period  # ~2 h at 2.885 min/unit
+    x = traj[1000:, 4] - traj[1000:, 4].mean()  # after the transient
+    ups = t[1000:][1:][(x[:-1] < 0) & (x[1:] >= 0)]  # upward zero crossings
+    period = float((ups[-1] - ups[0]) / (len(ups) - 1))
+    assert 30 < period < 60, period  # ~2 h at 2.885 min/unit
 
 
 def test_camera_noise_switch_and_statistics():

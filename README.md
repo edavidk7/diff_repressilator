@@ -497,7 +497,7 @@ loss over the full record every 25 epochs.
 
 ```bash
 uv sync
-uv run pytest tests -q                                   # all tests
+uv run pytest tests -q                                   # all tests (~3 min)
 
 # the benchmark (resumable; one JSON per fit in run_results/panel_benchmark/<method>/)
 uv run python experiments/panel_benchmark.py --method gradient,abc,magi,pinn --seeds 20 --workers 5 --threads 2
@@ -506,15 +506,29 @@ uv run python experiments/panel_benchmark.py --method gradient,abc --workers 3  
 # figures (run_results/figures/)
 uv run python experiments/plot_results.py                # results_main: seeds complete for every method on both cell types
 uv run python experiments/plot_fit_comparison.py
-uv run python experiments/plot_identifiability.py        # add --replot to restyle without recomputing
+uv run python experiments/identifiability.py             # add --replot to restyle without recomputing
 uv run python experiments/poster_sim_plots.py
 uv run python experiments/dga_gradient_growth.py
+
+# how well each estimate fits the time series, and controls for that comparison (run_results/fit_quality/)
+uv run python experiments/fit_controls.py abc --workers 2 && uv run python experiments/fit_controls.py refine --workers 4
+uv run python experiments/fit_controls.py abc --particles 64 --max-sims 96000 --workers 4
+uv run python experiments/fit_quality.py
 
 # side experiments
 uv run python experiments/tuning.py --workers 3 && uv run python experiments/tuning.py --report
 uv run python experiments/restart_spread.py --workers 3 && uv run python experiments/restart_spread.py --report
 uv run python experiments/restart_spread.py --workers 3 --epochs 600 --lr-final 1e-5
 ```
+
+| file | contents |
+|---|---|
+| `src/differentiable_cell/reporters.py` | the model: ODE right-hand side and the same model as a reaction network |
+| `src/differentiable_cell/reporter_sim.py` | simulated cells (ODE or Gillespie), camera, frames |
+| `src/differentiable_cell/gillespie.py` | exact and differentiable Gillespie samplers |
+| `src/differentiable_cell/fit.py` | the inverse problem, backpropagation fit, Laplace intervals |
+| `src/differentiable_cell/abc.py`, `solver_free.py`, `nuts.py` | ABC-SMC; MAGI and the inverse PINN; the NUTS sampler MAGI uses |
+| `experiments/common.py` | reporter configurations, one cell's fitting problem, the job pool |
 
 ## 8. References
 

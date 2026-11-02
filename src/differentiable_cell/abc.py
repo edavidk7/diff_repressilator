@@ -1,15 +1,9 @@
-"""ABC-SMC (Toni et al., 2009): likelihood-free, no gradients.
+"""ABC-SMC (Toni et al. 2009): likelihood-free, no gradients.
 
-Particles are drawn from the prior, simulated, and kept if the simulation is
-within a tolerance ``eps`` of the data. Each later population resamples the
-previous one by weight, perturbs it, and uses a smaller ``eps``:
-
-    distance  = sqrt(range-normalised MSE)   (the same measure the gradient fit minimises)
-    kernel    = uniform random walk per coordinate, width from the previous population
-    eps_t     = median distance of population t-1
-    weight    = prior / sum_j w_j K(theta | theta_j)   (prior is uniform on the box)
-
-Toni et al. tune the kernel and the tolerances by hand; here both adapt, so
+Each population resamples the previous one by weight, perturbs it and keeps what lands within ``eps``:
+distance = sqrt(range-normalised MSE), the measure the gradient fit minimises; kernel = uniform random walk
+with width from the previous population; eps = the previous population's median distance;
+weight = prior / sum_j w_j K(theta | theta_j), prior uniform on the box. Kernel and tolerances adapt, so
 nothing is tuned on the true answer.
 """
 
@@ -27,12 +21,7 @@ def distance(problem: Problem, theta: torch.Tensor) -> torch.Tensor:
 
 
 def proposals(theta, w, half_width, lo, hi, batch, g):
-    """``batch`` perturbed particles inside the prior box.
-
-    Outside the box the prior is zero, so such proposals are rejected before
-    simulating. In ~15 dimensions only a small fraction of perturbations land
-    inside, so draw many and keep the first ``batch`` (a redraw costs nothing).
-    """
+    """``batch`` perturbed particles inside the box (outside, the prior is zero: reject before simulating)."""
     kept, have = [], 0
     while have < batch:
         parents = theta[torch.multinomial(w, 20 * batch, replacement=True, generator=g)]
@@ -43,13 +32,10 @@ def proposals(theta, w, half_width, lo, hi, batch, g):
     return torch.cat(kept)[:batch]
 
 
-def fit_abc(problem: Problem, particles: int = 500, batch: int = 500, max_sims: int = 200_000,
+def fit_abc(problem: Problem, particles: int = 500, batch: int = 500, max_sims: int = 300_000,
             min_acceptance: float = 1e-3, seed: int = 0):
-    """Run populations until the simulation budget or the acceptance floor is hit.
-
-    Returns the final particles ``(particles, dim)``, their weights, and one
-    ``(eps, acceptance)`` record per population.
-    """
+    """Populations until the simulation budget or the acceptance floor. Returns the final particles
+    ``(particles, dim)``, their weights and one ``(eps, acceptance)`` per population."""
     g = torch.Generator().manual_seed(seed)
     lo, hi = problem.lo, problem.hi
 
@@ -84,3 +70,13 @@ def fit_abc(problem: Problem, particles: int = 500, batch: int = 500, max_sims: 
         if acceptance < min_acceptance:
             break
     return theta, w, history
+
+
+def weighted_median(particles: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    """Per-coordinate weighted median of the particles: the point estimate."""
+    out = []
+    for i in range(particles.shape[1]):
+        order = particles[:, i].argsort()
+        cdf = weights[order].cumsum(0)
+        out.append(particles[order[int((cdf >= 0.5).nonzero()[0])], i])
+    return torch.stack(out)

@@ -48,8 +48,8 @@ def rate(half_time_min: float) -> float:
 
 REPORTERS = ("lac", "tet", "cI")
 FP_BRIGHTNESS = {"lac": 13.76, "tet": 34.87, "cI": 68.25}  # FPbase
-K_MAT = torch.tensor([rate(1.7), rate(4.1), rate(2.0)])  # maturation (FPbase)
-DELTA = torch.tensor([rate(40.0), rate(60.0), rate(40.0)])  # tag decay (Andersen 1998)
+K_MAT = torch.tensor([rate(1.7), rate(4.1), rate(2.0)], dtype=torch.float64)  # maturation (FPbase)
+DELTA = torch.tensor([rate(40.0), rate(60.0), rate(40.0)], dtype=torch.float64)  # tag decay (Andersen 1998)
 
 # Which protein represses which promoter, as indices 0..2 into (LacI, TetR, CI).
 GENE_REPRESSOR = [2, 0, 1]  # lacI <- CI, tetR <- LacI, cI <- TetR
@@ -71,12 +71,8 @@ def repression(y: torch.Tensor, p: dict, present: torch.Tensor) -> torch.Tensor:
 
 
 def rhs(y: torch.Tensor, p: dict, present: torch.Tensor) -> torch.Tensor:
-    """Time derivative of the 15-species state ``(..., 15)``.
-
-    ``p`` holds scalars (or batch tensors) ``alpha, alpha_0, n, beta`` and
-    3-vectors ``a, a_0, tau`` (one entry per reporter). ``present`` is a 0/1
-    3-vector saying which reporters exist; only they titrate.
-    """
+    """d(state)/dt ``(..., 15)``. ``p``: ``alpha, alpha_0, n, beta`` (scalars or batches) and per-reporter
+    3-vectors ``a, a_0, tau``; ``present``: 0/1 per reporter (only built reporters titrate)."""
     h = repression(y, p, present)
     alpha, alpha_0 = p["alpha"].unsqueeze(-1), p["alpha_0"].unsqueeze(-1)
     beta = p["beta"].unsqueeze(-1)
@@ -97,24 +93,18 @@ def rhs(y: torch.Tensor, p: dict, present: torch.Tensor) -> torch.Tensor:
     return out
 
 
-# ---------------------------------------------------------------------------
-# The same model as a reaction network in molecule counts (for Gillespie).
-#
-# omega = K_M in molecules, eff = proteins per transcript. Count scales:
-#   protein and reporter protein  omega
-#   circuit mRNA                  omega * beta / eff
-#   reporter mRNA                 omega * delta / eff
-# Dividing the network's drift by these scales gives rhs() exactly (tested).
-# ---------------------------------------------------------------------------
+# The same model as a reaction network in molecule counts (for Gillespie). omega = K_M in molecules.
+# Counts per model unit: proteins omega, circuit mRNA omega beta / EFF, reporter mRNA omega delta / EFF;
+# with these scales the network's drift equals rhs() (tested).
 
-EFF = 20.0
+EFF = 20.0  # proteins per transcript
 
 
 def count_scales(p: dict, omega: float) -> torch.Tensor:
     """Molecules per model unit, for each of the 15 species."""
     s = torch.full((N_STATE,), float(omega), dtype=torch.float64)
     s[M_IDX] = omega * float(p["beta"]) / EFF
-    s[R_IDX] = omega * DELTA.double() / EFF
+    s[R_IDX] = omega * DELTA / EFF
     return s
 
 

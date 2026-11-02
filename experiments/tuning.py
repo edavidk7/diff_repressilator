@@ -1,30 +1,20 @@
-"""Light tuning of the gradient fit: loss, optimiser, learning-rate schedule.
+"""Light tuning of the gradient fit (loss, optimiser, schedule), judged on fit quality only.
 
-    python experiments/tuning.py --workers 3      run (resumes; one JSON per fit)
-    python experiments/tuning.py --report         table: variant x (fit MSE / truth MSE, errors)
+    python experiments/tuning.py --workers 3      run (resumes)
+    python experiments/tuning.py --report         variant x (fit MSE / MSE at truth, errors)
 
-Every variant is judged on the same scale: the plain MSE of its final fit
-relative to the MSE at the true parameters (<= 1: it reached the likelihood
-optimum), and the relative errors of alpha, n, beta. Reduced budget (32
-restarts x 1000 epochs); the comparison is relative.
+6 ODE cells, reduced budget (32 restarts x 1000 epochs); the comparison is relative.
 """
 
 import argparse
 import json
 import statistics
-import subprocess
-import sys
 import time
-from pathlib import Path
 
-import torch
+from common import RESULTS, cell, run_pool, setup_torch, slug, true_theta
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from identifiability_reporters import panel, true_theta  # noqa: E402
-from panel_benchmark import PANELS  # noqa: E402
-
-OUT = Path(__file__).resolve().parent.parent / "run_results" / "tuning"
-DATASETS = [(p, s) for s in (0, 1) for p in ("GFP only", "3 reporters", "TetR fusion + GFP")]
+OUT = RESULTS / "tuning"
+CELLS = [(p, s) for s in (0, 1) for p in ("GFP only", "3 reporters", "TetR fusion + GFP")]
 VARIANTS = {
     "baseline (adam, exp, mse, lr .05)": {},
     "l1 loss": {"loss": "l1"},
@@ -39,25 +29,14 @@ VARIANTS = {
 PARAMS = ("alpha", "n", "beta")
 
 
-def jobs():
-    return [(v, p, s) for v in VARIANTS for p, s in DATASETS]
+def job_file(variant: str, name: str, seed: int):
+    return OUT / f"{slug(variant)}__{slug(name)}__seed{seed}.json"
 
 
-def job_file(v, p, s) -> Path:
-    slug = lambda x: "".join(c if c.isalnum() else "_" for c in x)
-    return OUT / f"{slug(v)}__{slug(p)}__seed{s}.json"
+def run_one(variant: str, name: str, seed: int) -> None:
+    from differentiable_cell.fit import fit_gradient
 
-
-def run_one(variant: str, name: str, seed: int, threads: int) -> None:
-    torch.set_num_threads(threads)
-    torch.set_default_dtype(torch.float64)
-    from differentiable_cell.fit import Problem, fit_gradient
-    from differentiable_cell.reporter_sim import box1_truth, generate
-
-    channels, present = panel(PANELS[name])
-    data = generate(box1_truth(), present, kind="ode", noise=True, seed=seed)
-    problem = Problem(t=data.t, y=data.y[:, channels], channels=channels, present=present,
-                      tau=data.truth["tau"])
+    problem, data = cell(name, "ode", seed)
     truth = true_theta(problem, data).clamp(problem.lo, problem.hi)
     t0 = time.perf_counter()
     theta, final = fit_gradient(problem, restarts=32, epochs=1000, seed=seed, **VARIANTS[variant])
@@ -71,44 +50,33 @@ def run_one(variant: str, name: str, seed: int, threads: int) -> None:
 
 def report() -> None:
     rows = [json.loads(p.read_text()) for p in OUT.glob("*.json")]
-    print("| variant | fits | median fit/truth MSE | reached optimum (<= 1.02) | median α err | median n err | median β err | median wall [min] |")
+    print("| variant | fits | median fit/truth MSE | at optimum (<= 1.02) | α | n | β | wall [min] |")
     print("|---|---|---|---|---|---|---|---|")
     for v in VARIANTS:
         rs = [r for r in rows if r["variant"] == v]
-        if not rs:
-            continue
-        med = lambda f: statistics.median(f(r) for r in rs)
-        reached = sum(r["mse_ratio"] <= 1.02 for r in rs)
-        print(f"| {v} | {len(rs)} | {med(lambda r: r['mse_ratio']):.3f} | {reached}/{len(rs)} | "
-              + " | ".join(f"{med(lambda r: r['rel_err'][k]):.1%}" for k in PARAMS)
-              + f" | {med(lambda r: r['wall']) / 60:.1f} |")
+        if rs:
+            med = lambda f: statistics.median(f(r) for r in rs)
+            errs = " | ".join(f"{med(lambda r: r['rel_err'][k]):.1%}" for k in PARAMS)
+            print(f"| {v} | {len(rs)} | {med(lambda r: r['mse_ratio']):.3f} | "
+                  f"{sum(r['mse_ratio'] <= 1.02 for r in rs)}/{len(rs)} | {errs} | {med(lambda r: r['wall']) / 60:.1f} |")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--threads", type=int, default=3)
-    ap.add_argument("--job", type=int)
+    ap.add_argument("--one", nargs=3, metavar=("VARIANT", "CONFIG", "SEED"))
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args()
     if args.report:
         return report()
-    todo = jobs()
-    if args.job is not None:
-        return run_one(*todo[args.job], threads=args.threads)
+    if args.one:
+        setup_torch(args.threads)
+        return run_one(args.one[0], args.one[1], int(args.one[2]))
     OUT.mkdir(parents=True, exist_ok=True)
-    pending = [i for i, j in enumerate(todo) if not job_file(*j).exists()]
-    running: list[subprocess.Popen] = []
-    log = open(OUT / "log.txt", "a")
-    while pending or running:
-        running = [p for p in running if p.poll() is None]
-        while pending and len(running) < args.workers:
-            i = pending.pop(0)
-            running.append(subprocess.Popen([sys.executable, __file__, "--job", str(i),
-                                             "--threads", str(args.threads)],
-                                            stdout=log, stderr=subprocess.STDOUT))
-        time.sleep(10)
-    print("done", flush=True)
+    jobs = [["--threads", str(args.threads), "--one", v, n, str(s)]
+            for v in VARIANTS for n, s in CELLS if not job_file(v, n, s).exists()]
+    run_pool(__file__, jobs, args.workers, OUT / "log.txt")
 
 
 if __name__ == "__main__":

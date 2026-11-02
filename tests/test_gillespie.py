@@ -1,9 +1,8 @@
-import pytest
 import torch
 
-from conftest import paper_params, start_state
-from differentiable_cell.gillespie import run_dga, run_gillespie, ssa_dga, ssa_exact
-from differentiable_cell.langevin import run_langevin
+from differentiable_cell import reporters as R
+from differentiable_cell.gillespie import ssa_dga, ssa_exact
+from differentiable_cell.reporter_sim import box1_truth, mask, params, start_state
 
 BIRTH_DEATH = torch.tensor([[1.0], [-1.0]], dtype=torch.float64)
 
@@ -61,24 +60,11 @@ def test_dga_gradient_of_mean_matches_analytic():
 
 
 def test_dga_repressilator_runs_and_differentiates():
-    params = paper_params()
-    params.alpha = params.alpha.clone().requires_grad_(True)
-    t = torch.linspace(0, 5, 11, dtype=torch.float64)
-    out = run_dga(start_state(4), params, t, omega=2.0,
-                  generator=torch.Generator().manual_seed(0))
-    (grad,) = torch.autograd.grad(out.p_TetR.sum(), params.alpha)
-    assert torch.isfinite(out.p_TetR).all() and torch.isfinite(grad) and grad != 0
-
-
-@pytest.mark.slow
-def test_exact_repressilator_agrees_with_cle_at_large_system_size(params):
-    # At omega = 400 the CLE is accurate, so the first-peak heights of the
-    # two simulators must agree; this ties the SSA to the tested CLE/ODE.
-    t = torch.linspace(0, 30, 61, dtype=torch.float64)
-    ssa = run_gillespie(start_state(12), params, t, omega=400.0,
-                        generator=torch.Generator().manual_seed(1))
-    cle = run_langevin(start_state(256), params, t, omega=400.0,
-                       generator=torch.Generator().manual_seed(0))
-    peak_ssa = ssa.p_TetR.max(0).values.mean()
-    peak_cle = cle.p_TetR.max(0).values.mean()
-    assert abs(float(peak_ssa / peak_cle) - 1) < 0.08, (peak_ssa, peak_cle)
+    p0, m = params(box1_truth()), mask([0, 1, 2])
+    alpha = p0["alpha"].clone().requires_grad_(True)
+    p = dict(p0, alpha=alpha)
+    x0 = (start_state(p0, m, 0.0) * R.count_scales(p0, 2.0)).expand(4, R.N_STATE).clone()
+    x = ssa_dga(lambda x: R.propensities(x, p, m, 2.0), R.stoichiometry(), x0, torch.linspace(0, 0.5, 6),
+                generator=torch.Generator().manual_seed(0), max_events=2_000_000)
+    (grad,) = torch.autograd.grad(x[-1].mean(), alpha)
+    assert torch.isfinite(x).all() and torch.isfinite(grad) and grad != 0

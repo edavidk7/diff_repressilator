@@ -10,15 +10,15 @@ hidden noise-free fluorescence.
 """
 
 import json
-from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-ROOT = Path(__file__).resolve().parent.parent / "run_results"
-IN, OUT = ROOT / "panel_benchmark", ROOT / "figures"
+from common import FIGURES, RESULTS
+
+IN, OUT = RESULTS / "panel_benchmark", FIGURES
 CELL = "2_reporters__ssa__seed1.json"
 HOURS_PER_UNIT = 2.0 / 0.6931471805599453 / 60  # model time unit = mRNA lifetime
 GRID = (179 / 255, 179 / 255, 179 / 255)

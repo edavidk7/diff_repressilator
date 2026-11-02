@@ -7,7 +7,6 @@ for the poster: black ink, gray (#b3b3b3) gridlines, channel
 colours as in the circuit schematic, transparent background.
 """
 
-from pathlib import Path
 
 import matplotlib
 
@@ -17,8 +16,10 @@ import torch
 
 from differentiable_cell.reporter_sim import FRAME_MIN, box1_truth, generate
 
+from common import FIGURES
+
 torch.set_default_dtype(torch.float64)
-OUT = Path(__file__).resolve().parent.parent / "run_results" / "figures"
+OUT = FIGURES
 INK = "black"
 GRID = (179 / 255, 179 / 255, 179 / 255)  # #b3b3b3, as in the schematics
 CHANNELS = [("mJuniper (LacI reporter)", "#1f8a7a"), ("GFP (TetR reporter)", "#3f7f2a"),

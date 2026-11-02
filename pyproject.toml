@@ -1,24 +1,19 @@
 [project]
 name = "differentiable-cell"
 version = "0.1.0"
-description = "Add your description here"
+description = "Repressilator parameter inference by backpropagation through an ODE solver, against ABC-SMC, MAGI and an inverse PINN"
 readme = "README.md"
 authors = [
     { name = "David Korčák", email = "korcadav@fel.cvut.cz" }
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "dynesty>=3.1.0",
     "matplotlib>=3.11.1",
     "numpy>=2.5.3",
     "scipy>=1.18.1",
-    "tensordict>=0.14.1",
     "torch>=2.14.0",
     "torchdiffeq>=0.2.5",
 ]
-
-[project.scripts]
-differentiable-cell = "differentiable_cell:main"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]

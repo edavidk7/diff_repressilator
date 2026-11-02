@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from differentiable-cell!")
+"""Repressilator with fluorescent reporters: simulation and parameter inference."""

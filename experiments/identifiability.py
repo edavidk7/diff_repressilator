@@ -1,185 +1,123 @@
-"""Which parameters could a given experiment actually measure?
+"""How precisely could one cell's frames determine each parameter? (Fisher information at the truth)
 
-Fitting answers this one observation set at a time and takes tens of minutes
-per answer.  The local (Fisher) version answers it for every candidate set at
-once, in seconds, by linearising the observed trajectory around the true
-parameters.
+    python experiments/identifiability.py                 -> run_results/figures/identifiability.{png,pdf,svg}
+    python experiments/identifiability.py --replot        restyle from identifiability.json
+    python experiments/identifiability.py --combinations "lac,tet,cI"   eigen-combinations for one set of channels
 
-For parameters ``theta`` observed through species ``S`` at sampling times ``t``:
-
-    J[t, s, i] = d x_s(t) / d log(theta_i)     (log, so errors come out relative)
-    FIM        = J^T J / sigma^2               (summed over the observed s and t)
-    Cov        = FIM^-1                        (Cramer-Rao lower bound)
-
-``sqrt(Cov_ii)`` is then the best relative standard error any unbiased
-estimator could achieve for ``theta_i`` from that experiment - a floor, not a
-promise, since it ignores every nonlinearity and local minimum that makes real
-fitting harder.  A parameter whose bound is above ~100% cannot be measured by
-that experiment at all; a near-singular FIM means some *combination* of
-parameters is unconstrained even when each looks fine alone.
-
-Usage:
-    python experiments/identifiability.py <clean-run-directory>
+Fisher information J^T J / sigma^2 of the range-normalised frames (sigma^2: residual variance at the truth),
+the starting state profiled out (Schur complement), the log-uniform prior box added (variance width^2 / 12).
+1-sigma in log units ~ relative error. ODE cell, seed 1, camera noise on.
 """
 
 import argparse
+import json
 import math
-from pathlib import Path
 
+import matplotlib
 import torch
 
-from differentiable_cell.data import RepressilatorState
-from differentiable_cell.helpers import TAU_M_MIN
-from differentiable_cell.model import Repressilator
-from differentiable_cell.run import FIELDS, PARAM_FIELDS
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
-from _common import integrate, load_run, params_from_dict, setup_logging
+from differentiable_cell.fit import Problem
+from differentiable_cell.reporter_sim import CHANNELS, box1_truth, generate
 
-# Observation sets that correspond to experiments somebody could actually run.
-CANDIDATES: dict[str, list[str]] = {
-    "GFP only (the paper)": ["p_GFP"],
-    "GFP + one fusion (TetR-YFP)": ["p_GFP", "p_TetR"],
-    "two repressor fusions": ["p_LacI", "p_TetR"],
-    "three repressor fusions": ["p_LacI", "p_TetR", "p_CI"],
-    "three fusions + GFP": ["p_LacI", "p_TetR", "p_CI", "p_GFP"],
-    "three mRNAs (smFISH / MS2)": ["m_lacI", "m_tetR", "m_cI"],
-    "three mRNAs + three fusions": [
-        "m_lacI", "m_tetR", "m_cI", "p_LacI", "p_TetR", "p_CI",
-    ],
-    "everything (not measurable)": list(FIELDS),
-}
+from common import FIGURES, PANELS, panel, true_theta
+
+torch.set_default_dtype(torch.float64)
+# Neutral tones: the method colours mean something else in the other figures.
+PARAMS = [("alpha", "α", "#1a1a1a"), ("n", "n", "#5c5c5c"), ("beta", "β", "#9a9a9a"), ("alpha_0", "α₀", "#d0d0d0")]
 
 
-def jacobian(
-    model: Repressilator,
-    payload: dict,
-    t: torch.Tensor,
-    step: float = 1e-4,
-) -> torch.Tensor:
-    """d(trajectory) / d(log parameter), by central differences.
-
-    Central differences rather than autograd because it needs only 2 solves
-    per parameter and is immune to the solver's own gradient subtleties; the
-    step is in log space so the result is already a relative sensitivity.
-    """
-    state = RepressilatorState(**payload["initial_state"], batch_size=())
-    spec = payload["config"]["integration"]
-    truth = payload["params"]
-
-    columns = []
-    for name in PARAM_FIELDS:
-        shifted = []
-        for sign in (+1, -1):
-            values = dict(truth)
-            values[name] = truth[name] * math.exp(sign * step)
-            with torch.no_grad():
-                traj = integrate(model, state, params_from_dict(values), t, spec)
-            shifted.append(torch.stack([getattr(traj, f) for f in FIELDS], dim=-1))
-        columns.append((shifted[0] - shifted[1]) / (2.0 * step))
-    return torch.stack(columns, dim=-1)  # (time, species, parameter)
+def profiled_fisher(problem: Problem, theta: torch.Tensor, noise_var: float):
+    """Fisher information of the kinetic parameters with the starting state profiled out, and their names."""
+    f = lambda th: (problem.predict(th) / problem.range).reshape(-1)
+    J = torch.autograd.functional.jacobian(f, theta, vectorize=True, strategy="forward-mode")
+    fisher = J.T @ J / noise_var
+    kin = [i for i, n in enumerate(problem.names) if not n.endswith("(0)")]
+    nui = [i for i, n in enumerate(problem.names) if n.endswith("(0)")]
+    F_kk, F_kn, F_nn = fisher[kin][:, kin], fisher[kin][:, nui], fisher[nui][:, nui]
+    schur = F_kk - F_kn @ torch.linalg.pinv(F_nn) @ F_kn.T
+    return 0.5 * (schur + schur.T), [problem.names[i] for i in kin]
 
 
-def analyse(
-    J: torch.Tensor, observed: list[int], scales: torch.Tensor, sigma: float
-) -> tuple[dict[str, float | None], float]:
-    """Cramer-Rao relative standard errors, and the FIM condition number.
+def fisher_for(spec: str):
+    channels, present = panel(spec)
+    data = generate(box1_truth(), present, kind="ode", noise=True, seed=1)
+    problem = Problem(t=data.t, y=data.y[:, channels], channels=channels, present=present, tau=data.truth["tau"])
+    theta = true_theta(problem, data)
+    return problem, *profiled_fisher(problem, theta, float(problem.loss(theta)))
 
-    A parameter the observed species do not respond to at all - alpha_GFP when
-    no reporter is measured, say - would make the FIM singular and wrongly
-    condemn every other parameter with it.  Those are separated out first and
-    reported as having no effect, and the bound is computed on the rest.
-    """
-    # Normalise each species by its own range, so `sigma` means "this fraction
-    # of the species' full swing" for every species alike.
-    sensitivity = (J[:, observed, :] / scales[observed].unsqueeze(-1)).reshape(
-        -1, len(PARAM_FIELDS)
-    )
-    norms = sensitivity.norm(dim=0)
-    active = [
-        i for i in range(len(PARAM_FIELDS))
-        if norms[i] > 1e-10 * norms.max().clamp(min=1e-300)
-    ]
-    result: dict[str, float | None] = {p: None for p in PARAM_FIELDS}
-    if not active:
-        return result, float("inf")
 
-    fim = sensitivity[:, active].T @ sensitivity[:, active] / (sigma**2)
-    eigenvalues = torch.linalg.eigvalsh(fim)
-    condition = float(eigenvalues[-1] / eigenvalues[0].clamp(min=1e-300))
-    if eigenvalues[0] <= 0 or condition > 1e14:
-        for i in active:
-            result[PARAM_FIELDS[i]] = float("inf")
-        return result, condition
+def uncertainties() -> dict:
+    """Per configuration: 1-sigma (%) of each parameter with the prior box, and of the box alone."""
+    out = {}
+    for name, spec in PANELS.items():
+        problem, fisher, names = fisher_for(spec)
+        width = (problem.hi - problem.lo)[[problem.names.index(n) for n in names]]
+        cov = torch.linalg.inv(fisher + torch.diag(12.0 / width**2))
+        out[name] = {k: 100 * math.sqrt(float(cov[names.index(k), names.index(k)])) for k, _, _ in PARAMS}
+        out[name]["prior"] = {k: 100 * float(width[names.index(k)]) / math.sqrt(12) for k, _, _ in PARAMS}
+        print(name, {k: round(v, 1) for k, v in out[name].items() if k != "prior"}, flush=True)
+    return out
 
-    errors = torch.linalg.inv(fim).diagonal().sqrt()
-    for slot, i in enumerate(active):
-        result[PARAM_FIELDS[i]] = float(errors[slot])
-    return result, condition
+
+def combinations(spec: str) -> None:
+    """Eigenvectors of the profiled Fisher: which parameter combinations the frames determine."""
+    problem, fisher, names = fisher_for(spec)
+    evals, evecs = torch.linalg.eigh(fisher)
+    print(f"channels {spec}\n1-sigma (log units)   combination")
+    for k in reversed(range(len(evals))):
+        top = evecs[:, k].abs().argsort(descending=True)[:4]
+        combo = "  ".join(f"{float(evecs[i, k]):+.2f} log({names[i]})" for i in top if abs(evecs[i, k]) > 0.05)
+        print(f"{1 / math.sqrt(max(float(evals[k]), 1e-300)):10.3g}            {combo}")
+
+
+def plot(u: dict) -> None:
+    names, shown, width = list(u), PARAMS[:3], 0.26  # alpha_0: unidentifiable everywhere (caption says so)
+    fig, ax = plt.subplots(figsize=(12, 4.0))
+    for i, (key, sym, colour) in enumerate(shown):
+        xs = [p + (i - (len(shown) - 1) / 2) * width for p in range(len(names))]
+        ax.bar(xs, [u[n][key] for n in names], width=width * 0.9, color=colour, label=sym)
+    ax.set_yscale("log")
+    ax.set_ylim(top=100)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}%"))
+    ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: ""))
+    ax.axhline(10, color="black", lw=0.9, ls="--")
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(names, rotation=20, ha="right", rotation_mode="anchor", fontsize=13)
+    ax.tick_params(axis="y", labelsize=13)
+    ax.set_ylabel("achievable 1σ uncertainty", fontsize=15)
+    ax.set_title("Identifiability per reporter configuration", loc="left", fontsize=18, pad=34)
+    ax.text(0, 1.02, "Fisher information at the true parameters (dashed: 10%)", transform=ax.transAxes,
+            fontsize=13, va="bottom")
+    ax.legend(frameon=False, ncol=3, loc="lower right", bbox_to_anchor=(1.0, 0.99), fontsize=15, handlelength=1.2)
+    ax.grid(axis="y", color="#b3b3b3", lw=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    fig.tight_layout()
+    for ext in ("png", "pdf", "svg"):
+        fig.savefig(FIGURES / f"identifiability.{ext}", dpi=200, transparent=True)
+    print(FIGURES / "identifiability.png")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("run_dir", type=Path)
-    parser.add_argument(
-        "--sigma", type=float, default=0.05,
-        help="measurement noise, as a fraction of each species' range",
-    )
-    parser.add_argument(
-        "--sample_min", type=float, default=5.0,
-        help="sampling interval in minutes (time-lapse microscopy is ~5 min)",
-    )
-    args = parser.parse_args()
-    setup_logging()
-
-    payload = load_run(args.run_dir)
-    torch.set_default_dtype(getattr(torch, payload["config"]["dtype"]))
-    model = Repressilator()
-
-    # Subsample to a realistic imaging cadence: information scales with the
-    # number of frames, so using every solver output point would flatter every
-    # experiment equally and unrealistically.
-    full_t = payload["t"]
-    stride = max(1, round(args.sample_min / TAU_M_MIN / float(full_t[1] - full_t[0])))
-    t = full_t[::stride]
-
-    clean = torch.stack([payload["trajectory"][f] for f in FIELDS], dim=-1)
-    scales = (clean.max(0).values - clean.min(0).values).clamp(min=1e-8)
-    J = jacobian(model, payload, t)
-
-    print(
-        f"\nSampling every {args.sample_min:g} min ({t.numel()} frames over "
-        f"{float(t[-1]) * TAU_M_MIN:.0f} min), noise sigma = {args.sigma:.0%} "
-        "of each species' range."
-    )
-    print(
-        "Best achievable relative standard error per parameter "
-        "(Cramer-Rao floor; '-' = unconstrained):\n"
-    )
-    header = "".join(f"{p:>11}" for p in PARAM_FIELDS)
-    print(f"  {'experiment':<32}{header}   cond(FIM)")
-    print("  " + "-" * (32 + 11 * len(PARAM_FIELDS) + 12))
-
-    for label, species in CANDIDATES.items():
-        observed = [FIELDS.index(s) for s in species]
-        errors, condition = analyse(J, observed, scales, args.sigma)
-        cells = ""
-        for name in PARAM_FIELDS:
-            e = errors[name]
-            if e is None:
-                cells += f"{'n/a':>11}"          # not reachable by this experiment
-            elif not math.isfinite(e) or e >= 10:
-                cells += f"{'>1000%':>11}"       # unconstrained
-            else:
-                cells += f"{e * 100:>10.2f}%"
-        print(f"  {label:<32}{cells}   {condition:9.2e}")
-
-    print(
-        "\n  n/a    = the observed species do not respond to that parameter at "
-        "all\n  >1000% = reachable in principle, but unconstrained in practice"
-        "\n\nA floor above ~100% means the experiment cannot measure that "
-        "parameter.\ncond(FIM) >> 1 means some *combination* is far less "
-        "constrained than any\nsingle parameter suggests."
-    )
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--replot", action="store_true")
+    ap.add_argument("--combinations", metavar="CHANNELS", help=f"comma-separated, from {[c[0] for c in CHANNELS]}")
+    args = ap.parse_args()
+    if args.combinations:
+        return combinations(args.combinations)
+    FIGURES.mkdir(parents=True, exist_ok=True)
+    cached = FIGURES / "identifiability.json"
+    if args.replot and cached.exists():
+        u = json.loads(cached.read_text())
+    else:
+        u = uncertainties()
+        cached.write_text(json.dumps(u, indent=2))
+    plot(u)
 
 
 if __name__ == "__main__":

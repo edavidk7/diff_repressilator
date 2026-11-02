@@ -1,21 +1,11 @@
-"""Solver-free estimators: MAGI and an inverse PINN.
+"""Solver-free estimators: MAGI and an inverse PINN. Neither integrates the ODE.
 
-Neither integrates the ODE. Both represent each modelled species as a smooth
-function of time and enforce the dynamics as a residual:
-
-* MAGI (Yang, Wong & Kou 2021; Wong 2024 at zero delay): a Matern-5/2
-  Gaussian process per species on a grid ``I`` (the frames, refined), tied to
-  the ODE by requiring the GP's derivative to match the vector field.
-  Hyperparameters of observed species by GP marginal likelihood (noise
-  included); hidden species borrow a scale (see :func:`species_scales`). MAP by
-  Adam, then NUTS preconditioned by the MAP's Hessian.
-* PINN (Casajuana et al. 2026): a 5 x 100 sine network ``t -> species``,
-  softplus output, loss = ODE residual + data misfit, Adam.
-
-Modelled species: the six circuit species plus each present reporter's r, D, F.
-Unknowns and their boxes are those of :class:`differentiable_cell.fit.Problem`
-(kinetic parameters); starting values are read off the fitted curves at t = 0.
-Both return a full ``theta`` in the layout of ``Problem.names``.
+Both model each species (six circuit, plus r, D, F per built reporter) as a smooth curve and enforce the
+ODE as a residual. MAGI (Yang, Wong & Kou 2021): a Matern-5/2 GP per species on the frames refined
+``refine`` times, hyperparameters of observed species by marginal likelihood, MAP by Adam, then NUTS
+preconditioned by the MAP's Hessian. PINN (Casajuana et al. 2026): a 5 x 100 sine network t -> species,
+loss = ODE residual + data misfit. Both return ``theta`` in the layout of ``Problem.names``, the start
+read off the fitted curves at t = 0.
 """
 
 import math
@@ -36,12 +26,8 @@ def modelled_species(problem: Problem) -> list[int]:
 
 
 def species_scales(problem: Problem, species: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mean and standard deviation for each modelled species (normalisation, GP fallback).
-
-    Observed: from the data. Hidden reporter mRNA / dark FP: that reporter's
-    channel (dark FP at ~5%). Hidden circuit species: the mean over observed
-    fusions, or over all observed channels if there are none.
-    """
+    """Mean and sd per modelled species: observed ones from their channel; hidden reporter r, D from the
+    reporter's channel (D at ~5%); hidden circuit species from the fusions, else all channels."""
     y = problem.y
     obs = {s: c for c, s in enumerate(problem.observed_state)}
     fusion_cols = [c for s, c in obs.items() if s in R.P_IDX] or list(range(y.shape[1]))

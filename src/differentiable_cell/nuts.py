@@ -1,28 +1,10 @@
-"""NUTS through the ODE: the Bayesian version of backprop.
-
-Same gradients as :func:`differentiable_cell.fit.fit_gradient`, spent on
-sampling the posterior instead of finding its mode:
-
-* likelihood: Gaussian on the range-normalised residuals, with each channel's
-  noise variance estimated from the residuals of the gradient fit (a plug-in;
-  no truth used); prior: uniform on the boxes;
-* start and metric: the gradient fit (MAP), preconditioned by the exact
-  Hessian of the log posterior there. Eigenvalues are floored at the prior's
-  own curvature (0.25 in z), so directions the data do not determine get
-  prior-width steps - a tiny floor made the step size collapse to ~1e-7;
-* 4 chains from jittered starts, split-R-hat reported (> 1.1: not converged).
-
-The sampler (Hoffman & Gelman 2014, Algorithm 6 with dual averaging) is
-written out below.
-"""
+"""No-U-Turn sampler (Hoffman & Gelman 2014, Algorithm 6 with dual averaging), identity metric."""
 
 import math
 import time
 from typing import Callable
 
 import torch
-
-from differentiable_cell.fit import Problem
 
 LogProb = Callable[[torch.Tensor], tuple[float, torch.Tensor]]
 
@@ -75,20 +57,10 @@ def nuts(
     seed: int = 0,
     max_seconds: float | None = None,
 ) -> tuple[torch.Tensor, dict]:
-    """Sample with NUTS (identity metric) from ``x0``.
+    """Draw ``n_samples`` after ``n_warmup`` step-size adaptation iterations from ``x0``.
 
-    Args:
-        logp_grad: returns ``(log density, gradient)`` at a point.
-        x0: starting point.
-        n_warmup: dual-averaging adaptation iterations (discarded).
-        n_samples: kept iterations.
-        target_accept: dual-averaging target.
-        max_depth: maximum tree depth (``2**max_depth - 1`` leapfrogs).
-        seed: random seed.
-        max_seconds: stop sampling (keeping what was drawn) after this.
-
-    Returns:
-        ``(samples (N, d), diagnostics)``.
+    ``logp_grad(x)`` returns (log density, gradient); ``max_seconds`` stops early, keeping what was drawn.
+    Returns ``(samples (N, d), diagnostics)``.
     """
     rng = torch.Generator().manual_seed(seed)
     d = x0.numel()
@@ -159,83 +131,3 @@ def nuts(
         "mean_accept": sum(accepts) / max(len(accepts), 1),
         "n_kept": len(samples),
     }
-
-
-def split_rhat(chains: torch.Tensor) -> torch.Tensor:
-    """Split-R-hat per coordinate for ``(n_chains, n_draws, d)`` draws."""
-    n = chains.shape[1] // 2
-    if n < 2:
-        return torch.full((chains.shape[-1],), float("nan"), dtype=chains.dtype)
-    halves = torch.cat([chains[:, :n], chains[:, n:2 * n]], dim=0)  # (2C, n, d)
-    within = halves.var(1).mean(0)
-    between = n * halves.mean(1).var(0)
-    var_plus = (n - 1) / n * within + between / n
-    return (var_plus / within.clamp_min(1e-300)).sqrt()
-
-
-
-
-def fit_nuts(problem: Problem, theta_map: torch.Tensor, chains: int = 4, warmup: int = 150,
-             samples: int = 250, max_depth: int = 6, max_seconds: float = 1200.0, seed: int = 0):
-    """Sample the posterior from the MAP. Returns posterior draws ``(N, dim)`` and diagnostics."""
-    with torch.no_grad():
-        resid = (problem.predict(theta_map) - problem.y) / problem.range
-        noise_var = resid.pow(2).mean(0)  # per channel, from the MAP fit
-    z_map = problem.to_z(theta_map).detach()
-
-    def log_post(z):
-        r = (problem.predict(problem.from_z(z)) - problem.y) / problem.range
-        log_lik = -0.5 * (r**2 / noise_var).sum()
-        log_prior = (torch.nn.functional.logsigmoid(z) + torch.nn.functional.logsigmoid(-z)).sum()
-        return log_lik + log_prior
-
-    hess = torch.autograd.functional.hessian(lambda z: -log_post(z), z_map)
-    evals, evecs = torch.linalg.eigh(0.5 * (hess + hess.T))
-    chol = evecs / evals.clamp_min(0.25).sqrt()  # chol @ chol.T = floored inverse Hessian
-
-    def logp_grad(x):
-        x = x.detach().requires_grad_(True)
-        lp = log_post(z_map + chol @ x)
-        if not torch.isfinite(lp):
-            return -math.inf, torch.zeros_like(x)
-        (g,) = torch.autograd.grad(lp, x)
-        return float(lp), torch.nan_to_num(g)
-
-    g = torch.Generator().manual_seed(seed)
-    draws, diags = [], []
-    for c in range(chains):
-        x0 = torch.randn(len(z_map), generator=g, dtype=z_map.dtype)
-        xs, diag = nuts(logp_grad, x0, n_warmup=warmup, n_samples=samples, max_depth=max_depth,
-                        seed=seed * 100 + c, max_seconds=max_seconds / chains)
-        draws.append(xs)
-        diags.append(diag)
-    kept = min(len(d) for d in draws)
-    theta_chains = problem.from_z(z_map + torch.stack([d[-kept:] for d in draws]) @ chol.T)
-    return theta_chains.reshape(-1, len(z_map)), {
-        "draws_per_chain": kept, "rhat_max": float(split_rhat(theta_chains).max()),
-        "step_size": [d["step_size"] for d in diags], "mean_tree_depth": [d["mean_tree_depth"] for d in diags]}
-
-
-def fit_laplace(problem: Problem, theta_map: torch.Tensor, n_draws: int = 4000, seed: int = 0):
-    """Laplace approximation at the MAP: a Gaussian with the (floored) inverse Hessian.
-
-    The same log posterior and Hessian as :func:`fit_nuts`, but no sampling of
-    the posterior itself: the "free" uncertainty that comes with backprop.
-    Returns draws ``(n_draws, dim)`` (in the box) and diagnostics.
-    """
-    with torch.no_grad():
-        resid = (problem.predict(theta_map) - problem.y) / problem.range
-        noise_var = resid.pow(2).mean(0)
-    z_map = problem.to_z(theta_map).detach()
-
-    def neg_log_post(z):
-        r = (problem.predict(problem.from_z(z)) - problem.y) / problem.range
-        log_prior = (torch.nn.functional.logsigmoid(z) + torch.nn.functional.logsigmoid(-z)).sum()
-        return 0.5 * (r**2 / noise_var).sum() - log_prior
-
-    hess = torch.autograd.functional.hessian(neg_log_post, z_map)
-    evals, evecs = torch.linalg.eigh(0.5 * (hess + hess.T))
-    chol = evecs / evals.clamp_min(0.25).sqrt()
-    g = torch.Generator().manual_seed(seed)
-    eps = torch.randn(n_draws, len(z_map), generator=g, dtype=z_map.dtype)
-    return problem.from_z(z_map + eps @ chol.T), {"negative_hessian_eigs": int((evals < 0).sum())}

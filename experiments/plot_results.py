@@ -1,23 +1,15 @@
-"""Figures from run_results/panel_benchmark.
+"""Figures from the benchmark fits.
 
-    python experiments/plot_results.py         -> run_results/figures/
+    python experiments/plot_results.py      -> run_results/figures/
 
-* ``timeseries/<method>/<panel>__<kind>.png`` - one row per seed, one column
-  per observed channel: data frames (dots), the fit (line) and the hidden
-  truth (grey), with that seed's errors in the row title.
-* ``errors_<kind>.png`` - percentage error of alpha, n, beta, alpha_0 across
-  seeds: one box per method for every panel.
-* ``errors_summary_{ode,gillespie}.{png,pdf,svg}`` - the same pooled over seeds and the
-  panels every method ran on, one box per method (poster style, 200 dpi).
-* ``errors_summary_both.{png,pdf,svg}`` - both of those side by side in one figure.
-* ``results_main.{png,pdf,svg}`` - poster results: alpha/n/beta error per method on ODE and
-  Gillespie cells (shared axis) and the fit to the data, main panels, matched cells only.
+results_main          parameter errors on ODE and Gillespie cells, and the fit ratio (poster and paper)
+errors_<kind>         errors per configuration, one box per method
+timeseries/<method>/  per configuration and kind: frames, fit and hidden truth for every seed
 """
 
 import json
 import math
 from collections import defaultdict
-from pathlib import Path
 
 import matplotlib
 
@@ -25,10 +17,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
+from common import FIGURES, MAIN_PANELS, PANELS, RESULTS
+
 PERCENT = FuncFormatter(lambda v, _: f"{v:g}%")
 
-ROOT = Path(__file__).resolve().parent.parent / "run_results"
-IN, OUT = ROOT / "panel_benchmark", ROOT / "figures"
+IN, OUT = RESULTS / "panel_benchmark", FIGURES
 MINUTES_PER_UNIT = 2.0 / 0.6931471805599453  # model time unit = mRNA lifetime
 
 METHOD_COLOUR = {"gradient": "#2a78d6", "laplace": "#1baf7a", "abc": "#eb6834", "magi": "#e87ba4",
@@ -42,8 +35,7 @@ METHOD_LABEL = {"gradient": "diff. ODE (ours)", "laplace": "backprop + Laplace",
 CHANNEL_COLOUR = {"lac": "#1baf7a", "tet": "#008300", "cI": "#e34948",
                   "LacI-fusion": "#4a3aa7", "TetR-fusion": "#eda100", "CI-fusion": "#e87ba4"}
 PARAMS = [("alpha", "α"), ("n", "n"), ("beta", "β"), ("alpha_0", "α₀")]
-PANEL_ORDER = ["GFP only", "2 reporters", "3 reporters", "TetR fusion", "TetR fusion + GFP",
-               "TetR fusion + cI reporter", "TetR fusion + 3 reporters", "3 fusions"]
+PANEL_ORDER = list(PANELS)
 
 
 def style(ax):
@@ -130,85 +122,12 @@ def errors_by_panel(rows, kind):
     plt.close(fig)
 
 
-def summary_rows(rows, kind):
-    """Methods run on ``kind`` cells (no Laplace: same estimate as backprop) and their rows,
-    pooled only over the panels every one of them ran on, so each box sees the same cells."""
-    methods = [m for m in METHOD_COLOUR if m != "laplace" and any(r["method"] == m and r["kind"] == kind for r in rows)]
-    panels = set.intersection(*[{r["panel"] for r in rows if r["method"] == m and r["kind"] == kind} for m in methods])
-    return methods, [r for r in rows if r["kind"] == kind and r["panel"] in panels and r["method"] in methods]
-
-
-def error_row(axes, rows, methods, labels=True, titles=True, params=PARAMS):
-    """One box per method for each parameter, one axis per parameter (poster style)."""
-    for ax, (key, sym) in zip(axes, params):
-        data = [[100 * r["rel_err"][key] for r in rows if r["method"] == m] for m in methods]
-        bp = ax.boxplot(data, patch_artist=True, widths=0.5, medianprops=dict(color="white", lw=1.5),
-                        whiskerprops=dict(color="black"), capprops=dict(color="black"),
-                        flierprops=dict(markeredgecolor="black"))
-        for box, m in zip(bp["boxes"], methods):
-            box.set(facecolor=METHOD_COLOUR[m], edgecolor=METHOD_COLOUR[m])
-        for x, vals in enumerate(data, start=1):
-            ax.scatter([x] * len(vals), vals, s=14, color="white", edgecolors="black", linewidths=0.6, zorder=3)
-        ax.set_xticks(range(1, len(methods) + 1))
-        if labels:
-            ax.set_xticklabels([METHOD_LABEL[m] for m in methods], rotation=45, ha="right",
-                               rotation_mode="anchor", fontsize=12)
-        else:
-            ax.set_xticklabels([])
-        ax.tick_params(axis="y", labelsize=12)
-        ax.set_xlim(0.5, len(methods) + 0.5)
-        ax.set_yscale("log")
-        ax.yaxis.set_major_formatter(PERCENT)
-        ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: ""))
-        if titles:
-            ax.set_title(sym, loc="left", fontsize=15)
-        ax.axhline(10, color="black", lw=0.8, ls="--")
-        ax.grid(color="black", lw=0.4, alpha=0.35)
-        ax.set_axisbelow(True)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-
-
 def save(fig, name):
     for ext in ("png", "pdf", "svg"):
         fig.savefig(OUT / f"{name}.{ext}", dpi=200, transparent=True)
     plt.close(fig)
 
 
-def errors_summary(rows, kind):
-    """Poster figure for one kind of cell: error pooled over seeds and the common panels."""
-    methods, rows = summary_rows(rows, kind)
-    fig, axes = plt.subplots(1, len(PARAMS), figsize=(8.0, 4.8))
-    error_row(axes, rows, methods)
-    cell = "ODE" if kind == "ode" else "Gillespie"
-    how = "ODE" if kind == "ode" else "Gillespie's algorithm"
-    fig.suptitle(f"Percentual parameter estimation errors,\ncells simulated through {how}",
-                 x=0.01, ha="left", fontsize=15)
-    fig.tight_layout(w_pad=0.3)
-    save(fig, f"errors_summary_{cell.lower()}")
-
-
-def errors_summary_both(rows):
-    """Both kinds of cell in one poster figure, side by side: ODE cells left, Gillespie
-    cells right, each a 2 x 2 grid of parameters.
-
-    Both use the same method slots so they line up; a method not (yet) run on a kind of
-    cell leaves its slot empty.
-    """
-    per_kind = {kind: summary_rows(rows, kind) for kind in ("ode", "ssa")}
-    methods = [m for m in METHOD_COLOUR if any(m in per_kind[k][0] for k in per_kind)]
-    fig = plt.figure(figsize=(11.0, 7.4), layout="constrained")
-    fig.suptitle("Percentual parameter estimation errors", x=0.01, ha="left", fontsize=15)
-    for sub, (kind, label) in zip(fig.subfigures(1, 2, wspace=0.04),
-                                  [("ode", "ODE cells"), ("ssa", "Gillespie cells")]):
-        sub.suptitle(label, fontsize=14, fontweight="bold")
-        axes = sub.subplots(2, 2)
-        error_row(axes[0], per_kind[kind][1], methods, labels=False, params=PARAMS[:2])
-        error_row(axes[1], per_kind[kind][1], methods, params=PARAMS[2:])
-    save(fig, "errors_summary_both")
-
-
-MAIN_PANELS = ["GFP only", "3 reporters", "TetR fusion + GFP"]  # the panels every method runs on
 
 
 def matched_cells(rows, kind):
@@ -305,9 +224,6 @@ def main():
     for kind in ("ode", "ssa"):
         if any(r["kind"] == kind for r in rows):
             errors_by_panel(rows, kind)
-    for kind in ("ode", "ssa"):
-        errors_summary(rows, kind)
-    errors_summary_both(rows)
     results_main(rows)
     print(f"{len(rows)} fits -> {OUT}")
 

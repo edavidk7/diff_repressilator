@@ -1,7 +1,7 @@
 """Solver-free estimators: MAGI and an inverse PINN. Neither integrates the ODE.
 
 Both model each species (six circuit, plus r, D, F per built reporter) as a smooth curve and enforce the
-ODE as a residual. MAGI (Yang, Wong & Kou 2021): a Matern-5/2 GP per species on the frames refined
+ODE as a residual (works for the repressilator ``fit.Problem`` and for ``circuits.CircuitProblem``). MAGI (Yang, Wong & Kou 2021): a Matern-5/2 GP per species on the frames refined
 ``refine`` times, hyperparameters of observed species by marginal likelihood, MAP by Adam, then NUTS
 preconditioned by the MAP's Hessian. PINN (Casajuana et al. 2026): a 5 x 100 sine network t -> species,
 loss = ODE residual + data misfit. Both return ``theta`` in the layout of ``Problem.names``, the start
@@ -18,7 +18,9 @@ from differentiable_cell.fit import Problem
 from differentiable_cell.nuts import nuts
 
 
-def modelled_species(problem: Problem) -> list[int]:
+def modelled_species(problem) -> list[int]:
+    if not isinstance(problem, Problem):  # a circuit: every species
+        return list(range(len(problem.c.species)))
     out = list(range(6))
     for j in problem.present:
         out += [R.R_IDX[j], R.D_IDX[j], R.F_IDX[j]]
@@ -29,6 +31,12 @@ def species_scales(problem: Problem, species: list[int]) -> tuple[torch.Tensor, 
     """Mean and sd per modelled species: observed ones from their channel; hidden reporter r, D from the
     reporter's channel (D at ~5%); hidden circuit species from the fusions, else all channels."""
     y = problem.y
+    if not isinstance(problem, Problem):  # a circuit: hidden species get the scale of all observed channels
+        obs = {s: c for c, s in enumerate(problem.observed_state)}
+        cols = lambda s: [obs[s]] if s in obs else list(range(y.shape[1]))
+        means = [float(y[:, cols(s)].mean()) for s in species]
+        sds = [float(y[:, cols(s)].std()) for s in species]
+        return torch.tensor(means, dtype=torch.float64), torch.tensor(sds, dtype=torch.float64).clamp_min(1e-6)
     obs = {s: c for c, s in enumerate(problem.observed_state)}
     fusion_cols = [c for s, c in obs.items() if s in R.P_IDX] or list(range(y.shape[1]))
     circ_mean, circ_sd = float(y[:, fusion_cols].mean()), float(y[:, fusion_cols].std())
@@ -56,12 +64,16 @@ def params_from_z(problem: Problem, z_kin: torch.Tensor) -> dict:
     kin = kinetic_index(problem)
     theta = problem.lo.clone()
     theta[kin] = problem.lo[kin] + torch.sigmoid(z_kin) * (problem.hi[kin] - problem.lo[kin])
+    if not isinstance(problem, Problem):
+        return {k: theta[i].exp() for i, k in enumerate(problem.c.params)}
     p, _ = problem.params_and_start(theta)
     return p
 
 
-def rhs_on(problem: Problem, species: list[int], x: torch.Tensor, p: dict) -> torch.Tensor:
-    """Vector field for the modelled species, ``x`` of shape ``(N, S)``."""
+def rhs_on(problem, species: list[int], t: torch.Tensor, x: torch.Tensor, p: dict) -> torch.Tensor:
+    """Vector field for the modelled species at times ``t (N,)``, ``x`` of shape ``(N, S)``."""
+    if not isinstance(problem, Problem):
+        return problem.c.rhs(t, x, p)
     full = torch.zeros(x.shape[0], R.N_STATE, dtype=x.dtype)
     full[:, species] = x
     return R.rhs(full, p, problem.mask)[:, species]
@@ -72,6 +84,9 @@ def full_theta(problem: Problem, z_kin: torch.Tensor, x0: torch.Tensor, species:
     kin = kinetic_index(problem)
     theta = torch.zeros(len(problem.names), dtype=torch.float64)
     theta[kin] = problem.lo[kin] + torch.sigmoid(z_kin) * (problem.hi[kin] - problem.lo[kin])
+    if not isinstance(problem, Problem):
+        theta[len(kin):] = torch.log(x0.clamp_min(1e-12))
+        return torch.maximum(torch.minimum(theta, problem.hi), problem.lo)
     starts = {f"{n}(0)": i for i, n in enumerate(["m_lacI", "m_tetR", "m_cI", "p_LacI", "p_TetR", "p_CI"])}
     for j in problem.present:
         r = R.REPORTERS[j]
@@ -153,7 +168,7 @@ def fit_magi(problem: Problem, refine: int = 2, restarts: int = 3, map_iters: in
         x = w[: -n_kin].reshape(len(species), t.numel()) * sd.unsqueeze(-1)
         z = w[-n_kin:]
         xc = x - mean.unsqueeze(-1)
-        f = rhs_on(problem, species, x.T.clamp_min(0.0), params_from_z(problem, z)).T
+        f = rhs_on(problem, species, t, x.T.clamp_min(1e-9), params_from_z(problem, z)).T  # > 0: d(0^n)/dn is NaN
         dev = f - torch.einsum("snm,sm->sn", M, xc)
         gp = torch.einsum("sn,snm,sm->", xc, Cinv, xc) + torch.einsum("sn,snm,sm->", dev, Kinv, dev)
         data = (((x[obs_rows][:, ::refine].T - problem.y) / noise) ** 2).sum()
@@ -258,7 +273,7 @@ def fit_pinn(problem: Problem, restarts: int = 3, iterations: int = 20000, lr: f
         for _ in range(iterations):
             tc = t0 + (t1 - t0) * torch.rand(n_colloc, generator=g, dtype=torch.float64)
             u, du = torch.func.jvp(states, (tc,), (torch.ones_like(tc),))
-            residual = ((du - rhs_on(problem, species, u, params_from_z(problem, z))) / scale).pow(2).mean()
+            residual = ((du - rhs_on(problem, species, tc, u, params_from_z(problem, z))) / scale).pow(2).mean()
             misfit = ((states(t_obs)[:, obs_rows] - problem.y) / obs_scale).pow(2).mean()
             loss = residual + misfit
             opt.zero_grad()

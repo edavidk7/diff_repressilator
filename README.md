@@ -309,7 +309,7 @@ Median results on **Gillespie cells**
 |---|---|---|---|---|
 | **diff. ODE (ours)** | 73% | 8.5% | **11%** | **0.28×** |
 | ABC-SMC | 53% | 16% | 22% | 1.5× |
-| MAGI (37 of 39, 2 failed with NaN) | 64% | **5.8%** | 23% | 1.04× |
+| MAGI | 62% | **5.7%** | 23% | 0.93× |
 | inverse PINN | 58% | 23% | 16% | 2.2× |
 
 **On ODE cells ours is best on every parameter**, and it is the only method that reaches
@@ -515,6 +515,11 @@ uv run python experiments/fit_controls.py abc --workers 2 && uv run python exper
 uv run python experiments/fit_controls.py abc --particles 64 --max-sims 96000 --workers 4
 uv run python experiments/fit_quality.py
 
+# other circuits and real cells (Potvin-Trottier et al. 2016 movies; run_results/{circuits,real_repressilator,real_improved}/)
+uv run python experiments/circuits_benchmark.py --method gradient,abc,magi,pinn --workers 6 && uv run python experiments/circuits_benchmark.py --report
+uv run python experiments/real_repressilator.py --workers 6 && uv run python experiments/real_repressilator.py --report
+uv run python experiments/real_improved.py --workers 6 && uv run python experiments/real_improved.py --report
+
 # side experiments
 uv run python experiments/tuning.py --workers 3 && uv run python experiments/tuning.py --report
 uv run python experiments/restart_spread.py --workers 3 && uv run python experiments/restart_spread.py --report
@@ -528,6 +533,7 @@ uv run python experiments/restart_spread.py --workers 3 --epochs 600 --lr-final 
 | `src/differentiable_cell/gillespie.py` | exact and differentiable Gillespie samplers |
 | `src/differentiable_cell/fit.py` | the inverse problem, backpropagation fit, Laplace intervals |
 | `src/differentiable_cell/abc.py`, `solver_free.py`, `nuts.py` | ABC-SMC; MAGI and the inverse PINN; the NUTS sampler MAGI uses |
+| `src/differentiable_cell/circuits.py` | other circuits (autoregulation, toggle, Goodwin, feed-forward loop, dilution-only repressilator) |
 | `experiments/common.py` | reporter configurations, one cell's fitting problem, the job pool |
 
 ## 8. References

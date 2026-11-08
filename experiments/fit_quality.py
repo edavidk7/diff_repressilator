@@ -27,7 +27,7 @@ from scipy.stats import wilcoxon
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from common import MAIN_PANELS, RESULTS
+from common import MAIN_PANELS, RESULTS, current
 
 IN, CTRL, OUT = RESULTS / "panel_benchmark", RESULTS / "fit_controls", RESULTS / "fit_quality"
 HOURS_PER_UNIT = 2.0 / math.log(2) / 60
@@ -96,7 +96,7 @@ def metrics(r: dict) -> dict:
 def load():
     """rows[(kind, config, seed)][method] for cells every method finished, and their metrics."""
     raw = defaultdict(dict)
-    for p in IN.glob("*/*.json"):
+    for p in current(IN):
         r = json.loads(p.read_text())
         if r["method"] in METHODS and r["panel"] in MAIN_PANELS and r["seed"] < SEEDS:
             raw[(r["kind"], r["panel"], r["seed"])][r["method"]] = r
@@ -130,7 +130,7 @@ def paired(mets, kind, key="nrmse_hidden", n_boot=4000):
 
 def load_controls():
     refined = defaultdict(dict)
-    for p in (CTRL / "refine").glob("*/*.json"):
+    for p in current(CTRL / "refine"):
         r = json.loads(p.read_text())
         if r["seed"] < SEEDS and not r.get("failed"):
             refined[(r["kind"], r["panel"], r["seed"])][r["method"]] = r
@@ -320,19 +320,21 @@ def fig_controls(refined, abc):
 
 
 def fig_budget(abc) -> dict:
-    """Fit against trajectory solves: best of k restarts of backprop (k x 1500 forward + backward solves,
+    """Fit against trajectory solves: best of k restarts of backprop (k x epochs forward + backward solves,
     from the restart spread) and ABC-SMC per particle count and budget. Median over cells, bars: range."""
     ks, out = [1, 2, 4, 8, 16, 32, 64], {}
     fig, axes = plt.subplots(1, 2, figsize=(11, 3.9), sharey=True)
     for ax, kind in zip(axes, KINDS):
         spread = [json.loads(p.read_text()) for p in (RESULTS / "restart_spread").glob(f"*__{kind}__seed*.json")]
+        epochs = spread[0].get("epochs", 1500)
+        ks = [k for k in ks if k <= len(spread[0]["mse_ratio"])]
         per_k = [[best_of_k(r["mse_ratio"], k) for r in spread] for k in ks]
         meds = [st.median(v) for v in per_k]
-        ax.errorbar([k * 1500 for k in ks], meds, yerr=[np.subtract(meds, [min(v) for v in per_k]),
+        ax.errorbar([k * epochs for k in ks], meds, yerr=[np.subtract(meds, [min(v) for v in per_k]),
                                                          np.subtract([max(v) for v in per_k], meds)],
                     color=COLOUR["gradient"], marker="o", ms=4, lw=1.8, capsize=2)
         for k, y in zip(ks, meds):
-            ax.annotate(f"k={k}", (k * 1500, y), textcoords="offset points", xytext=(0, -12), ha="center",
+            ax.annotate(f"k={k}", (k * epochs, y), textcoords="offset points", xytext=(0, -12), ha="center",
                         fontsize=7, color=COLOUR["gradient"])
         out[kind] = {"gradient_best_of_k": dict(zip(ks, meds))}
         for P, S in sorted({k[:2] for k in abc}):

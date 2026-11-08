@@ -2,7 +2,7 @@
 
     python experiments/restart_spread.py --workers 3     run (resumes)
     python experiments/restart_spread.py --report        tables and run_results/restart_spread/restart_curves.png
-    add --epochs 600 and/or --lr-final 1e-5 for another schedule (own output folder)
+    add --epochs and/or --lr-final for another budget (own output folder)
 
 Same cells and settings as the benchmark's gradient fit (seed 0), but every restart's MSE (relative to the
 MSE at the truth) and errors are kept, at the end and every 25 epochs.
@@ -22,8 +22,8 @@ OPTIMUM = 1.02  # MSE ratio at or below this: the restart reached the optimum
 
 
 def out_dir(epochs: int, lr_final: float):
-    name = "_".join(([f"epochs{epochs}"] if epochs != 1500 else []) + ([f"lrfinal{lr_final:g}"] if lr_final != 2.5e-4 else []))
-    return RESULTS / "restart_spread" / name
+    name = "_".join(([f"epochs{epochs}"] if epochs != 600 else []) + ([f"lrfinal{lr_final:g}"] if lr_final != 2.5e-4 else []))
+    return RESULTS / "restart_spread" / name  # the first study (64 x 1500, staged): restart_spread/v1/
 
 
 def job_file(folder, name: str, kind: str, seed: int):
@@ -45,7 +45,8 @@ def run_one(name: str, kind: str, seed: int, epochs: int, lr_final: float) -> No
         fit = problem.values(theta)
         return {k: [abs(float(v) - float(true[k])) / float(true[k]) for v in fit[k]] for k in PARAMS}
 
-    row = {"panel": name, "kind": kind, "seed": seed, "wall": time.perf_counter() - t0,
+    row = {"panel": name, "kind": kind, "seed": seed, "epochs": epochs, "restarts": len(final),
+           "wall": time.perf_counter() - t0,
            "mse_ratio": [float(f) / mse_truth for f in final], "rel_err": errors(thetas),
            "history": [{"epoch": e, "mse_ratio": [float(f) / mse_truth for f in mse], "rel_err": errors(th)}
                        for e, mse, th in history]}
@@ -94,7 +95,7 @@ def plot(rows, folder, epochs: int) -> None:
             ax.plot(x, c, color="#325ba9" if i == best else "#abbddc", lw=2 if i == best else 0.7,
                     zorder=3 if i == best else 1)
         ax.axhline(1.0, color="#325ba9", lw=0.8, ls="--")
-        for e in (epochs // 3, 2 * epochs // 3):  # curriculum window changes
+        for e in (int(0.1 * epochs), int(0.9 * epochs)):  # the window starts growing / reaches the full record
             ax.axvline(e, color="#abbddc", lw=0.8, ls=":")
         ax.set_yscale("log")
         ax.set_ylim(0.8 * min(min(c) for c in curves), 1e3)
@@ -112,7 +113,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--threads", type=int, default=3)
-    ap.add_argument("--epochs", type=int, default=1500)
+    ap.add_argument("--epochs", type=int, default=600)
     ap.add_argument("--lr-final", type=float, default=2.5e-4)
     ap.add_argument("--one", nargs=3, metavar=("CONFIG", "KIND", "SEED"))
     ap.add_argument("--report", action="store_true")

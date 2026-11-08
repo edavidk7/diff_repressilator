@@ -30,6 +30,11 @@ MAIN_PANELS = ("GFP only", "3 reporters", "TetR fusion + GFP")  # every method r
 KINDS = ("ode", "ssa")  # deterministic or exact-Gillespie cell
 
 
+def current(folder):
+    """Result JSONs one level down, skipping archived earlier versions (folders ending in _v1)."""
+    return [p for p in sorted(folder.glob("*/*.json")) if not p.parent.name.endswith("_v1")]
+
+
 def slug(text: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in text)
 

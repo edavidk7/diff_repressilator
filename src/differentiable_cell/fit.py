@@ -133,12 +133,17 @@ class Problem:
         return per_point.mean((-1, -2))
 
 
-def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 1500, lr: float = 0.05,
-                 lr_final: float = 2.5e-4, stages=(0.25, 0.5, 1.0), curriculum: str = "stages",
-                 start_fraction: float = 0.1, ramp=(0.1, 0.75), seed: int = 0, loss: str = "mse",
-                 optimizer: str = "adam", schedule: str = "exp", return_all: bool = False,
+def fit_gradient(problem: Problem, restarts: int = 32, epochs: int = 600, lr: float = 0.05,
+                 lr_final: float = 2.5e-4, stages=(0.25, 0.5, 1.0), curriculum: str = "ramp",
+                 start_fraction: float = 0.1, ramp=(0.1, 0.9), seed: int = 0, loss: str = "huber",
+                 optimizer: str = "adam", schedule: str = "coupled", return_all: bool = False,
                  history: list | None = None, history_every: int = 25):
     """Backpropagation through the solver from ``restarts`` prior draws, optimised as one batch.
+
+    Defaults (the method): Huber loss, Adam at lr 0.05 while the window grows from 10% of the record (held for
+    the first 10% of epochs) to all of it at 90%, then a cosine anneal to 2.5e-4 on the whole record; 32
+    restarts x 600 epochs. Chosen on fit quality over 12 cells (experiments/epoch_budget.py). Until then the
+    benchmark used 64 restarts x 1500 epochs, curriculum "stages", schedule "cosine" (results in *_v1).
 
     The loss first sees part of the record: a period error becomes a phase error that grows over the record
     and flattens the loss. ``curriculum="stages"``: the fractions ``stages`` in equal thirds of training;
@@ -213,8 +218,14 @@ def fit_laplace(problem: Problem, theta_map: torch.Tensor, n_draws: int = 4000, 
         log_prior = (torch.nn.functional.logsigmoid(z) + torch.nn.functional.logsigmoid(-z)).sum()
         return 0.5 * (r**2 / noise_var).sum() - log_prior
 
-    hess = torch.autograd.functional.hessian(neg_log_post, z_map)
-    evals, evecs = torch.linalg.eigh(0.5 * (hess + hess.T))
+    hess = torch.nan_to_num(torch.autograd.functional.hessian(neg_log_post, z_map))
+    try:
+        evals, evecs = torch.linalg.eigh(0.5 * (hess + hess.T))
+    except torch.linalg.LinAlgError:  # badly conditioned (unknowns at the box edge): LAPACK's slower, robust driver
+        import scipy.linalg
+
+        w, v = scipy.linalg.eigh((0.5 * (hess + hess.T)).numpy(), driver="ev")
+        evals, evecs = torch.from_numpy(w), torch.from_numpy(v)
     chol = evecs / evals.clamp_min(0.25).sqrt()
     eps = torch.randn(n_draws, len(z_map), generator=torch.Generator().manual_seed(seed), dtype=z_map.dtype)
     return problem.from_z(z_map + eps @ chol.T), {"negative_hessian_eigs": int((evals < 0).sum())}

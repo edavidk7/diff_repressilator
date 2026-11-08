@@ -39,7 +39,8 @@ def run_one(variant: str, name: str, seed: int) -> None:
     problem, data = cell(name, "ode", seed)
     truth = true_theta(problem, data).clamp(problem.lo, problem.hi)
     t0 = time.perf_counter()
-    theta, final = fit_gradient(problem, restarts=32, epochs=1000, seed=seed, **VARIANTS[variant])
+    old = {"loss": "mse", "schedule": "exp", "curriculum": "stages"}  # the baseline the variants modify
+    theta, final = fit_gradient(problem, restarts=32, epochs=1000, seed=seed, **(old | VARIANTS[variant]))
     fit, true = problem.values(theta), problem.values(truth)
     row = {"variant": variant, "panel": name, "seed": seed, "wall": time.perf_counter() - t0,
            "mse_ratio": float(final.min()) / float(problem.loss(truth)),

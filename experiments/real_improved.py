@@ -108,7 +108,7 @@ def run_one(method: str, trench: int, start: int, frames: int = WINDOW) -> None:
     print(method, trench, start, frames, round(row["nrmse_fit"], 3), round(row["nrmse_sine_fit"], 3), flush=True)
 
 
-METHODS = ["gradient", "gradient_linear", "abc", "magi", "pinn"]
+METHODS = ["gradient", "abc", "magi", "pinn"]
 
 
 def load(method: str, frames: int = WINDOW) -> list[dict]:
@@ -131,7 +131,7 @@ def report() -> None:
             print(f"            period data {med('period_data_h'):.2f} h, fit {med('period_fit_h'):.2f} h; "
                   + ", ".join(f"{k} {np.median([r['estimate'][k] for r in rows]):.3g}" for k in ("alpha", "n", "beta", "tau_tet")))
             plot(rows, f"fits_{m}.png" if m != "gradient" else "fits.png")
-    for m in ("gradient", "gradient_linear"):
+    for m in ("gradient",):
         full = load(m, FULL_FRAMES)
         if not full:
             continue

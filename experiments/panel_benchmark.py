@@ -19,12 +19,14 @@ import torch
 
 from differentiable_cell.reporter_sim import CHANNELS
 
-from common import KINDS, MAIN_PANELS, PANELS, RESULTS, cell, run_pool, setup_torch, slug, true_theta
+from common import KINDS, MAIN_PANELS, PANELS, RESULTS, cell, current, run_pool, setup_torch, slug, true_theta
 
 OUT = RESULTS / "panel_benchmark"
 PARAMS = ("alpha", "n", "beta", "alpha_0")
-# From tuning.py: the only variant at the optimum on all six tuning cells (chosen on fit, not on truth).
-GRADIENT_SETTINGS: dict = {"loss": "huber", "schedule": "cosine"}
+# The method's settings are fit_gradient's defaults (ramp curriculum, coupled schedule, 32 x 600; chosen on fit
+# quality, never on truth). The first benchmark used these (results in */gradient_v1, */laplace_v1):
+GRADIENT_SETTINGS: dict = {}
+V1_SETTINGS: dict = {"loss": "huber", "schedule": "cosine", "curriculum": "stages", "restarts": 64, "epochs": 1500}
 
 
 def job_file(method: str, name: str, kind: str, seed: int):
@@ -45,8 +47,6 @@ def estimate(method: str, problem, seed: int):
     from differentiable_cell.fit import fit_gradient, fit_laplace
     from differentiable_cell.solver_free import fit_magi, fit_pinn
 
-    if method == "gradient_linear":  # linear curriculum: 10% of the record at epoch 0 to all of it at the end
-        return fit_gradient(problem, seed=seed, **GRADIENT_SETTINGS, curriculum="linear")[0], None, {}
     if method in ("gradient", "laplace"):
         theta, _ = fit_gradient(problem, seed=seed, **GRADIENT_SETTINGS)
         return (theta, *fit_laplace(problem, theta, seed=seed)) if method == "laplace" else (theta, None, {})
@@ -94,7 +94,7 @@ def run_one(method: str, name: str, kind: str, seed: int) -> None:
 
 
 def report() -> None:
-    rows = [json.loads(p.read_text()) for p in OUT.glob("*/*.json")]
+    rows = [json.loads(p.read_text()) for p in current(OUT)]
     for method in sorted({r["method"] for r in rows}):
         for kind in KINDS:
             mine = [r for r in rows if r["method"] == method and r["kind"] == kind]

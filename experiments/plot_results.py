@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
-from common import FIGURES, MAIN_PANELS, PANELS, RESULTS
+from common import FIGURES, MAIN_PANELS, PANELS, RESULTS, current
 
 PERCENT = FuncFormatter(lambda v, _: f"{v:g}%")
 
@@ -218,7 +218,7 @@ def results_main(rows):
 
 
 def main():
-    rows = [json.loads(p.read_text()) for p in IN.glob("*/*.json")]
+    rows = [json.loads(p.read_text()) for p in current(IN)]
     OUT.mkdir(parents=True, exist_ok=True)
     timeseries(rows)
     for kind in ("ode", "ssa"):

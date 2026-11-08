@@ -134,14 +134,19 @@ class Problem:
 
 
 def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 1500, lr: float = 0.05,
-                 lr_final: float = 2.5e-4, stages=(0.25, 0.5, 1.0), seed: int = 0, loss: str = "mse",
+                 lr_final: float = 2.5e-4, stages=(0.25, 0.5, 1.0), curriculum: str = "stages",
+                 start_fraction: float = 0.1, ramp=(0.1, 0.75), seed: int = 0, loss: str = "mse",
                  optimizer: str = "adam", schedule: str = "exp", return_all: bool = False,
                  history: list | None = None, history_every: int = 25):
     """Backpropagation through the solver from ``restarts`` prior draws, optimised as one batch.
 
-    The loss first sees 25% of the frames, then 50%, then all: a period error becomes a phase error that
-    grows over the record and flattens the loss. ``optimizer``: adam, rmsprop or sgd (Nesterov);
-    ``schedule``: lr from ``lr`` to ``lr_final``, exponential or cosine. The best restart is chosen by
+    The loss first sees part of the record: a period error becomes a phase error that grows over the record
+    and flattens the loss. ``curriculum="stages"``: the fractions ``stages`` in equal thirds of training;
+    ``"linear"``: from ``start_fraction`` at the first epoch to the whole record at the last; ``"ramp"``: hold
+    ``start_fraction`` until the fraction ``ramp[0]`` of training, rise linearly to the whole record at
+    ``ramp[1]``, then hold it. ``optimizer``: adam, rmsprop or sgd (Nesterov); ``schedule``: lr from ``lr`` to
+    ``lr_final``, "exp" or "cosine" over training, or "coupled": ``lr`` while the window grows, then a cosine to
+    ``lr_final`` over the epochs on the whole record. The best restart is chosen by
     full-record MSE whatever the training loss. Returns its theta (all restarts' with ``return_all``) and
     every restart's final MSE; ``history`` collects ``(epoch, MSE per restart, theta per restart)``.
     """
@@ -150,11 +155,27 @@ def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 1500, lr: f
     opt = {"adam": lambda: torch.optim.Adam([z], lr=lr),
            "rmsprop": lambda: torch.optim.RMSprop([z], lr=lr),
            "sgd": lambda: torch.optim.SGD([z], lr=lr, momentum=0.9, nesterov=True)}[optimizer]()
+    G = problem.t.numel()
+    if curriculum in ("linear", "ramp"):  # frames the loss sees, per epoch
+        a, b = (0.0, 1.0) if curriculum == "linear" else ramp
+        progress = lambda e: min(max((e / max(epochs - 1, 1) - a) / (b - a), 0.0), 1.0)
+        window = [max(4, math.ceil((start_fraction + (1 - start_fraction) * progress(e)) * G)) for e in range(epochs)]
+    elif curriculum == "stages":
+        steps = [max(4, math.ceil(f * G)) for f in stages]
+        window = [steps[e * len(steps) // epochs] for e in range(epochs)]
+    else:
+        raise ValueError(f"curriculum {curriculum!r}")
     if schedule == "exp":
         sched = torch.optim.lr_scheduler.ExponentialLR(opt, (lr_final / lr) ** (1.0 / max(epochs - 1, 1)))
-    else:
+    elif schedule == "cosine":
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs, eta_min=lr_final)
-    windows = [max(4, math.ceil(f * problem.t.numel())) for f in stages]
+    elif schedule == "coupled":
+        full = next(e for e in range(epochs) if window[e] >= G)
+        r = lr_final / lr
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda e: 1.0 if e < full else
+                                                  r + (1 - r) * 0.5 * (1 + math.cos(math.pi * (e - full) / max(epochs - full, 1))))
+    else:
+        raise ValueError(f"schedule {schedule!r}")
 
     def full_mse():
         with torch.no_grad():
@@ -165,7 +186,7 @@ def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 1500, lr: f
         if history is not None and epoch % history_every == 0:
             history.append((epoch, *full_mse()))
         opt.zero_grad()
-        per_restart = problem.loss(problem.from_z(z), windows[epoch * len(windows) // epochs], kind=loss)
+        per_restart = problem.loss(problem.from_z(z), window[epoch], kind=loss)
         # Restarts are independent; one that goes non-finite stops moving.
         torch.where(torch.isfinite(per_restart), per_restart, torch.zeros_like(per_restart)).sum().backward()
         z.grad = torch.nan_to_num(z.grad, nan=0.0, posinf=0.0, neginf=0.0)

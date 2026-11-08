@@ -78,5 +78,7 @@ def run_pool(script: str, jobs: list[list[str]], workers: int, log: Path) -> Non
 
 
 def setup_torch(threads: int) -> None:
-    torch.set_num_threads(threads)
+    """``threads`` <= 0: torch's default, all cores."""
+    if threads > 0:
+        torch.set_num_threads(threads)
     torch.set_default_dtype(torch.float64)

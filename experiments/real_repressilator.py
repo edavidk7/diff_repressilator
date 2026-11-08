@@ -66,16 +66,25 @@ def sinusoid_fit(t: np.ndarray, y: np.ndarray):
     return lambda s: coef[0] + coef[1] * np.sin(2 * np.pi * s / T) + coef[2] * np.cos(2 * np.pi * s / T), T
 
 
-def run_one(trench: int, start: int) -> None:
-    from differentiable_cell.fit import Problem, fit_gradient
+def job_file(method: str, trench: int, start: int):
+    name = f"fit_trench{trench}_start{start}.json"
+    return OUT / name if method == "gradient" else OUT / method / name
+
+
+def run_one(method: str, trench: int, start: int) -> None:
+    import time
+
+    from differentiable_cell.fit import Problem
     from differentiable_cell.reporter_sim import DT_FRAME
-    from panel_benchmark import GRADIENT_SETTINGS
+    from panel_benchmark import estimate
 
     y_all = traces()[trench]
     t = torch.arange(WINDOW + 1, dtype=torch.float64) * DT_FRAME
     y = torch.tensor(y_all[start:start + WINDOW + 1]).unsqueeze(-1)
     problem = Problem(t=t, y=y, channels=[1], present=[1], tau=[0.75] * 3)  # GFP reporter of TetR
-    theta, _ = fit_gradient(problem, seed=trench * 1000 + start, **GRADIENT_SETTINGS)
+    t0 = time.perf_counter()
+    theta = estimate(method, problem, trench * 1000 + start)[0]
+    wall = time.perf_counter() - t0
     t_ext = torch.arange(WINDOW + FORECAST + 1, dtype=torch.float64) * DT_FRAME
     with torch.no_grad():
         pred = problem.predict(theta, t=t_ext)[:, 0].numpy()
@@ -85,19 +94,22 @@ def run_one(trench: int, start: int) -> None:
     rmse = lambda a, b: float(np.sqrt(np.mean((a - b) ** 2)) / rng)
     fit_part, fc = slice(0, WINDOW + 1), slice(WINDOW + 1, None)
     vals = problem.values(theta)
-    row = {"trench": trench, "start": start, "theta": theta.tolist(), "names": problem.names,
+    row = {"method": method, "wall": wall, "trench": trench, "start": start, "theta": theta.tolist(), "names": problem.names,
            "estimate": {k: float(vals[k]) for k in ("alpha", "alpha_0", "n", "beta")},
            "nrmse_fit": rmse(pred[fit_part], y_ext[fit_part]), "nrmse_sine_fit": rmse(sine(t.numpy()), y[:, 0].numpy()),
            "nrmse_forecast": rmse(pred[fc], y_ext[fc]), "nrmse_sine_forecast": rmse(sine(t_ext.numpy()[fc]), y_ext[fc]),
            "nrmse_mean_forecast": rmse(np.full(FORECAST, float(y.mean())), y_ext[fc]),
            "noise": float(np.std(np.diff(y[:, 0].numpy())) / math.sqrt(2) / rng),  # frame-to-frame noise
            "period_sine_h": T_sine * DT_FRAME / 12, "y": y_ext.tolist(), "pred": pred.tolist()}
-    (OUT / f"fit_trench{trench}_start{start}.json").write_text(json.dumps(row))
-    print(trench, start, round(row["nrmse_fit"], 3), round(row["nrmse_sine_fit"], 3), flush=True)
+    job_file(method, trench, start).parent.mkdir(parents=True, exist_ok=True)
+    job_file(method, trench, start).write_text(json.dumps(row))
+    print(method, trench, start, round(row["nrmse_fit"], 3), round(row["nrmse_sine_fit"], 3), flush=True)
 
 
-def report() -> None:
-    rows = sorted((json.loads(p.read_text()) for p in OUT.glob("fit_*.json")), key=lambda r: (r["trench"], r["start"]))
+def report(method: str = "gradient") -> None:
+    rows = sorted((json.loads(job_file(method, tr, s).read_text()) for s in STARTS for tr in range(len(TRENCH_X))
+                   if job_file(method, tr, s).exists()), key=lambda r: (r["trench"], r["start"]))
+    print(f"[{method}]")
     med = lambda k: float(np.median([r[k] for r in rows]))
     print(f"{len(rows)} fits. Median NRMSE (range-normalised):")
     for k in ("noise", "nrmse_fit", "nrmse_sine_fit", "nrmse_forecast", "nrmse_sine_forecast", "nrmse_mean_forecast"):
@@ -107,10 +119,10 @@ def report() -> None:
     for k in ("alpha", "alpha_0", "n", "beta"):
         v = np.array([r["estimate"][k] for r in rows])
         print(f"  {k:8s} median {np.median(v):8.3g}  IQR {np.percentile(v, 25):8.3g} - {np.percentile(v, 75):8.3g}")
-    plot(rows)
+    plot(rows, "fits.png" if method == "gradient" else f"fits_{method}.png")
 
 
-def plot(rows) -> None:
+def plot(rows, name: str = "fits.png") -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -128,25 +140,28 @@ def plot(rows) -> None:
         ax.grid(color="#e0e0e0", lw=0.5)
     axes[-1, 0].set_xlabel("time [h]  (dots: mother-cell GFP; line: fit; dashed: 2-h forecast)")
     fig.tight_layout()
-    fig.savefig(OUT / "fits.png", dpi=110)
-    print(OUT / "fits.png")
+    fig.savefig(OUT / name, dpi=110)
+    print(OUT / name)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--threads", type=int, default=1)
-    ap.add_argument("--one", nargs=2, type=int, metavar=("TRENCH", "START"))
+    ap.add_argument("--method", default="gradient", help="comma-separated, see panel_benchmark.estimate")
+    ap.add_argument("--one", nargs=3, metavar=("METHOD", "TRENCH", "START"))
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args()
     if args.report:
-        return report()
+        for m in args.method.split(","):
+            report(m)
+        return
     if args.one:
         setup_torch(args.threads)
-        return run_one(*args.one)
+        return run_one(args.one[0], int(args.one[1]), int(args.one[2]))
     traces()
-    jobs = [["--threads", str(args.threads), "--one", str(tr), str(s)] for s in STARTS for tr in range(len(TRENCH_X))
-            if not (OUT / f"fit_trench{tr}_start{s}.json").exists()]
+    jobs = [["--threads", str(args.threads), "--one", m, str(tr), str(s)] for s in STARTS for tr in range(len(TRENCH_X))
+            for m in args.method.split(",") if not job_file(m, tr, s).exists()]
     run_pool(__file__, jobs, args.workers, OUT / "log.txt")
 
 

@@ -45,6 +45,8 @@ def estimate(method: str, problem, seed: int):
     from differentiable_cell.fit import fit_gradient, fit_laplace
     from differentiable_cell.solver_free import fit_magi, fit_pinn
 
+    if method == "gradient_linear":  # linear curriculum: 10% of the record at epoch 0 to all of it at the end
+        return fit_gradient(problem, seed=seed, **GRADIENT_SETTINGS, curriculum="linear")[0], None, {}
     if method in ("gradient", "laplace"):
         theta, _ = fit_gradient(problem, seed=seed, **GRADIENT_SETTINGS)
         return (theta, *fit_laplace(problem, theta, seed=seed)) if method == "laplace" else (theta, None, {})

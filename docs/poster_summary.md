@@ -1,5 +1,10 @@
 # Poster summary: differentiable simulation for single-cell repressilator inference
 
+> Snapshot from the poster (first version of the fit: 64 restarts x 1500 epochs, 25 / 50 / 100%
+> curriculum, cosine lr; 3 seeds). The README has the current numbers (64 x 500, more seeds,
+> fit-quality controls, other circuits, real cells); the first version's fits are in
+> `run_results/*_v1`.
+
 Numbers below are measured (Box 1 parameters, 3 seeds, one cell of 10 h at
 5-min frames); `run_results/` holds every fit and figure. MAGI, PINN and
 Laplace ran on a reduced grid (3 panels x ODE cells x 3 seeds).

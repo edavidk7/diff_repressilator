@@ -5,8 +5,12 @@ David Korcak (dkorcak@ethz.ch) · MSc, Department of Computer Science, ETH Züri
 Inferring a gene circuit's parameters from sparse single-cell observations usually
 relies on dedicated estimators, optionally with a simulation. Using the repressilator,
 we show that **backpropagation through a differentiable simulation itself matches or
-outperforms them**. What limits inference is the choice of reporters, which we assess
-with an identifiability analysis.
+outperforms them**, and that its estimates reproduce the time series far better (§4.5,
+§4.6). The advantage is largest for oscillators: on other circuits it is competitive
+rather than dominant (§4.7), and on real mother-machine recordings of the improved
+repressilator it is the only one of four methods whose estimates oscillate (§4.8). What
+limits inference is the choice of reporters, which we assess with an identifiability
+analysis.
 
 <p align="center"><a href="docs/poster.pdf"><img src="assets/poster.png" width="520" alt="Poster"></a></p>
 
@@ -237,15 +241,19 @@ $$\mathcal{L} = \frac{1}{G\cdot C}\sum_{i=1}^{G\cdot C} H_\delta(r_i)$$
 
 ### Optimisation
 
-- We use Adam for 1500 epochs (update steps), and the learning rate (step
-  size) follows a cosine curve from 0.05 down to 2.5·10⁻⁴.
-- We use a *curriculum*. The loss first sees only the first 25% of the frames, then the
-  first 50%, then all of them. On a limit cycle a period error ΔT turns into a phase
-  error that grows linearly in time, roughly tΔT/T. Over the full 10 h a modest period
-  mismatch shifts the trajectory by whole cycles. The misfit then becomes nearly flat in
-  the parameters and has spurious minima wherever the model runs a cycle ahead or
-  behind. Fitting the first quarter and half of the record pins the period while phase
-  errors are still small, and the full record then refines it.
+- We use Adam for 500 epochs (update steps).
+- We use a *curriculum*. On a limit cycle a period error ΔT turns into a phase error
+  that grows linearly in time, roughly tΔT/T. Over the full 10 h a modest period mismatch
+  shifts the trajectory by whole cycles. The misfit then becomes nearly flat in the
+  parameters and has spurious minima wherever the model runs a cycle ahead or behind. So
+  the loss first sees only the first 10% of the frames (for the first 10% of epochs), then
+  a window that grows linearly to the whole record at 90% of the epochs. Fitting the early
+  part pins the period while phase errors are still small.
+- The **learning rate follows the window**. It stays at 0.05 while the window grows, so
+  restarts can still move between valleys, and anneals along a cosine to 2.5·10⁻⁴ during
+  the final 10% of epochs on the whole record, which settles each restart.
+- This is about 3.5× cheaper than the first version (1500 epochs, a 25% / 50% / 100%
+  curriculum and a cosine learning rate over all of training) and fits as well; see §5.
 
 ### Restarts
 
@@ -298,7 +306,7 @@ Median results on **ODE cells**
 
 | method | α | n | β | fit (× MSE at truth) |
 |---|---|---|---|---|
-| **diff. ODE (ours)** | **18%** | **3.4%** | **1.6%** | **0.94×** (all 39 between 0.87× and 1.0×) |
+| **diff. ODE (ours)** | **20%** | **4.2%** | **1.8%** | **0.96×** (all 39 between 0.87× and 1.00×) |
 | ABC-SMC | 61% | 15% | 54% | 219× |
 | MAGI | 34% | 12% | 17% | 64× |
 | inverse PINN | 50% | 28% | 16% | 278× |
@@ -307,7 +315,7 @@ Median results on **Gillespie cells**
 
 | method | α | n | β | fit (× MSE at truth) |
 |---|---|---|---|---|
-| **diff. ODE (ours)** | 73% | 8.5% | **11%** | **0.28×** |
+| **diff. ODE (ours)** | 81% | 7.1% | **9.2%** | **0.28×** |
 | ABC-SMC | 53% | 16% | 22% | 1.5× |
 | MAGI | 62% | **5.7%** | 23% | 0.93× |
 | inverse PINN | 58% | 23% | 16% | 2.2× |
@@ -331,13 +339,13 @@ the optimum. The other methods' estimates reproduce the data 64 to 278 times wor
 - MAGI estimates n better.
 - No method recovers α. The random variation in height from one cycle to the next
   swamps α, which is exactly the parameter that sets the height. Our per-cell α errors
-  range from 4% to 341%.
+  range from 1% to 344%.
 - Fits below 1× are expected here. A deterministic model run at the true parameters
   cannot follow the random path of a stochastic cell, so a fitted model can do better.
 
-**The number of seeds matters.** With only the first 3 seeds we looked better on
-Gillespie cells than we do with 13 (α 52% instead of 73%, n 5.5% instead of 8.5%). The
-result on ODE cells did not change.
+**The number of seeds matters.** With only the first 3 seeds our Gillespie α error is 117%
+instead of 81% with 13 (the first version of the fit showed the opposite, 52% instead of
+73%). Medians over a few stochastic cells are not stable; the ODE results are.
 
 ### 4.2 What the difference looks like
 
@@ -348,7 +356,7 @@ this configuration it is the median case for ABC-SMC, not the most flattering co
 Both methods started from the same prior draws, since ABC's first 64 particles are
 exactly our 64 starting guesses.
 
-- Ours follows the timing and height of each cycle, at 0.53× the MSE at the truth.
+- Ours follows the timing and height of each cycle, at 0.52× the MSE at the truth.
 - ABC-SMC settles on small, fast oscillations, at 2.6×.
 
 ### 4.3 Differentiable Gillespie does not qualify
@@ -411,19 +419,104 @@ by what is measured.
 
 | configuration | seeds | achieved α / n / β | achievable 1σ α / n / β |
 |---|---|---|---|
-| GFP only | 14 | 37% / 6.4% / 5.3% | 69% / 11.6% / 4.6% |
-| 2 reporters (GFP + mScarlet-I3) | 3 | 10% / 2.8% / 0.6% | 30% / 5.7% / 2.1% |
-| 3 reporters | 14 | 30% / 2.9% / 1.6% | 39% / 7.0% / 2.0% |
-| TetR fusion | 3 | 11% / 3.4% / 0.3% | 11% / 3.6% / 0.9% |
-| TetR fusion + GFP | 13 | 9% / 2.0% / 0.7% | 9% / 3.5% / 1.5% |
-| TetR fusion + mScarlet-I3 | 3 | 7% / 0.4% / 0.5% | 8% / 1.7% / 0.7% |
-| TetR fusion + 3 reporters | 3 | 6% / 2.1% / 0.9% | 11% / 3.4% / 0.9% |
-| 3 fusions | 3 | 2% / 1.4% / 0.6% | 9% / 3.0% / 0.7% |
+| GFP only | 14 | 38% / 4.9% / 5.3% | 69% / 11.6% / 4.6% |
+| 2 reporters (GFP + mScarlet-I3) | 3 | 14% / 4.4% / 0.6% | 30% / 5.7% / 2.1% |
+| 3 reporters | 14 | 42% / 5.4% / 2.2% | 39% / 7.0% / 2.0% |
+| TetR fusion | 3 | 13% / 4.2% / 0.3% | 11% / 3.6% / 0.9% |
+| TetR fusion + GFP | 13 | 9% / 2.9% / 0.9% | 9% / 3.5% / 1.5% |
+| TetR fusion + mScarlet-I3 | 3 | 10% / 4.2% / 1.4% | 8% / 1.7% / 0.7% |
+| TetR fusion + 3 reporters | 3 | 12% / 1.2% / 0.9% | 11% / 3.4% / 0.9% |
+| 3 fusions | 3 | 11% / 1.6% / 0.2% | 9% / 3.0% / 0.7% |
+
+### 4.5 How well each estimate reproduces the time series
+
+See [`fit_quality.py`](experiments/fit_quality.py). Every estimate is scored the same way:
+the ODE is integrated at it and compared with the frames and with the cell's hidden
+noise-free fluorescence. NRMSE is the root-mean-square error divided by the channel's range.
+
+| cells | method | NRMSE to frames | NRMSE to hidden truth | others / ours (95% CI) | closer cells | estimates that stop oscillating |
+|---|---|---|---|---|---|---|
+| ODE | **diff. ODE** | **0.029** | **0.0075** | 1 | | 0/39 |
+| | ABC-SMC | 0.446 | 0.450 | 59× [55, 62] | 39/39 | 20/39 |
+| | MAGI | 0.270 | 0.270 | 31× [28, 37] | 39/39 | 13/39 |
+| | inverse PINN | 0.485 | 0.484 | 67× [55, 80] | 39/39 | 25/39 |
+| Gillespie | **diff. ODE** | **0.111** | **0.113** | 1 | | 0/39 |
+| | ABC-SMC | 0.299 | 0.297 | 2.5× [2.2, 3.1] | 39/39 | 13/39 |
+| | MAGI | 0.210 | 0.211 | 2.0× [1.8, 2.3] | 39/39 | 9/39 |
+| | inverse PINN | 0.336 | 0.337 | 3.3× [2.7, 3.7] | 39/39 | 25/39 |
+
+On ODE cells ours reaches the camera noise (NRMSE 0.029 at the true parameters). The other
+estimates mostly fail in two ways: period errors that accumulate into phase drift (MAGI's
+error grows from 0.09 in the first hour to 0.33 in the last) and parameters at which the
+oscillation dies out. Removing the best constant time shift barely helps them, so the
+gap is not a global phase offset.
+
+### 4.6 Is that comparison fair?
+
+See [`fit_controls.py`](experiments/fit_controls.py). Scoring by forward integration of a
+point estimate favours a method whose output is such a trajectory, so we ran controls.
+
+- **Re-fitting only the starting state** of each competing estimate (parameters frozen)
+  brings none of them to the optimum on ODE cells. The misfit is in the parameters.
+- **A short local refinement** by backpropagation started from each estimate reaches the
+  optimum for 29 of 39 MAGI, 25 of 39 PINN and 15 of 39 ABC-SMC estimates. The solver-free
+  estimates are often close; their small errors are magnified by the integration.
+- **ABC-SMC's weighted median** is a poor summary of its population (fit 249× the truth's
+  MSE against 15× for its best particle, ODE cells). Its tolerance stalls near 0.3 NRMSE.
+- **Budget.** ABC-SMC with 64 or 500 particles and 96k or 300k simulations stays at 15-26×
+  (best particle) on ODE cells, while our fit uses 64 x 500 = 32k solves.
+
+### 4.7 Other circuits
+
+See [`circuits_benchmark.py`](experiments/circuits_benchmark.py) and
+[`circuits.py`](src/differentiable_cell/circuits.py): 5 synthetic ODE cells each, fit = MSE
+of the estimate's ODE trajectory / MSE at the truth (median).
+
+| circuit | diff. ODE | ABC-SMC | MAGI | inverse PINN |
+|---|---|---|---|---|
+| negative autoregulation (aTc pulse) | **0.96** | **0.96** | 169 | 215 |
+| toggle switch (IPTG, then aTc) | **0.97** | **0.97** | 1.18 | 1.02 |
+| Goodwin oscillator | **0.95** | 131 | 99 | 62 |
+| incoherent feed-forward loop | **0.94** | 3.8 | **1.00** | **0.98** |
+
+Only on the oscillator does ours alone reach the optimum. On the low-dimensional circuits
+ABC-SMC matches it; on the feed-forward loop MAGI and the PINN match it and recover some
+parameters better. When every method fits, the errors sit near the Fisher bounds.
+
+### 4.8 Real cells
+
+See [`real_repressilator.py`](experiments/real_repressilator.py) and
+[`real_improved.py`](experiments/real_improved.py). Mother-cell traces from the
+supplementary movies of Potvin-Trottier et al. [7]: compressed 8-bit videos, so a
+feasibility test rather than a measurement. NRMSE is range-normalised.
+
+**Original repressilator** (Video 2, GFP reporter, 9 cells, 27 windows of 10 h). Our fit
+(NRMSE 0.150, frame noise 0.062) beats a fitted sinusoid on 23 of 27 windows, but its 2-h
+forecasts are no better than the window mean: the circuit is too noisy for a deterministic
+model to predict.
+
+**Improved repressilator** (Video 6, no protein degradation, TetR sponge, three reporters,
+6 cells, 11 windows of 24 h), fitted with a dilution-only model:
+
+| method | fit NRMSE | 4-h forecast NRMSE | beats a sinusoid (fit / forecast) | fitted period (data 6.7 h) |
+|---|---|---|---|---|
+| **diff. ODE** | **0.135** | **0.205** | **11/11 / 11/11** | 6.8 h |
+| MAGI | 0.314 | 0.324 | 0/11 / 9/11 | 5.1 h |
+| inverse PINN | 0.355 | 0.391 | 0/11 / 5/11 | 3.7 h |
+| ABC-SMC | 0.362 | 0.353 | 0/11 / 5/11 | 4.4 h |
+
+The other methods' estimates mostly do not oscillate (Hill coefficients of 1.5-1.8 against
+our 2.7). Our protein dilution rate β = 0.075 is consistent across cells and implies a
+doubling time of about 27 min and a period of about 15 generations (the paper reports
+13.8). A single fit of each whole 54-h record (about 8 periods) stays in phase (NRMSE 0.166
+against 0.287 for the sinusoid). Two reporter maturation rates end at their prior bounds.
 
 ### Conclusion
 
 On the repressilator, plain backpropagation through a differentiable ODE matches or
-beats dedicated estimators. Accuracy is limited by the information the reporters reveal.
+beats dedicated estimators, and it is the only one whose estimates reliably reproduce an
+oscillating time series, synthetic or real. On non-oscillating circuits it is competitive
+rather than dominant. Accuracy is limited by the information the reporters reveal.
 Transcriptional reporters constrain the circuit's timing but not its absolute
 transcription rate. An identifiability analysis can therefore guide reporter design
 before a real experiment, both to maximise the chance of recovering the parameters and
@@ -431,20 +524,21 @@ to choose a suitable inference method.
 
 ## 5. Side experiments
 
-These experiments shaped the final settings. None of them changes the conclusions.
+These experiments shaped the settings. None of them changes the conclusions.
 
 ### Tuning the loss and optimiser
 
 See [`tuning.py`](experiments/tuning.py). This used 6 datasets (3 configurations times
 2 seeds, ODE cells) at a reduced budget of 32 restarts and 1000 epochs. Variants were
-judged on how well they fit the data, never on their errors against the true values.
+judged on how well they fit the data, never on their errors against the true values. It
+chose the loss (Huber) and, for the first version of the fit, the cosine schedule.
 
 | variant | median fit / truth MSE | reached optimum | α / n / β |
 |---|---|---|---|
 | MSE + exponential lr (baseline) | 1.097 | 3/6 | 42 / 9.1 / 3.9% |
 | Huber + exponential lr | 0.968 | 5/6 | 11 / 7.5 / 2.4% |
 | MSE + cosine lr | 0.981 | 5/6 | 40 / 9.2 / 3.6% |
-| **Huber + cosine lr (used)** | **0.940** | **6/6** | 33 / 13 / 2.9% |
+| **Huber + cosine lr (first version)** | **0.940** | **6/6** | 33 / 13 / 2.9% |
 | RMSprop | 1.228 | 0/6 | 31 / 19 / 11% |
 | SGD + Nesterov | 5.70 | 0/6 | 81 / 47 / 36% |
 
@@ -453,29 +547,53 @@ large residuals early in a fit. It is not a better model of camera noise, for wh
 is the correct likelihood. Once a fit reaches the optimum, the parameter errors are set
 by the data (§4.4), not by the loss.
 
-### How the 64 restarts spread
+### Curriculum, learning rate and budget
 
-See [`restart_spread.py`](experiments/restart_spread.py). This recorded every restart's
+See [`epoch_budget.py`](experiments/epoch_budget.py): 12 cells (3 configurations x both
+kinds x 2 seeds), each fit compared with the first version's fit of the same cell (64
+restarts x 1500 epochs, 25 / 50 / 100% curriculum, cosine lr). Gap = fit / that fit - 1.
+
+| at 32 restarts x 600 epochs | median gap | worst | within 2% |
+|---|---|---|---|
+| stages 25 / 50 / 100% (first version) | +0.9% | +6.2% | 7/12 |
+| ramp, full record from 75% of epochs | +0.8% | +5.1% | 7/12 |
+| ramp, full record from 90% | +1.1% | +5.1% | 7/12 |
+| **ramp from 90% + lr held until then (used)** | **+0.5%** | **+4.2%** | **8/12** |
+
+A purely linear window (10% to 100% over all of training, never holding the whole record)
+was about 3% worse on the single cell where it was tried. With the cosine schedule the
+learning rate is already small when the window first covers the whole record, so late
+curricula could not improve; coupling the learning rate to the window fixes that. Width is nearly free because the cost is per-step overhead:
+
+| restarts x epochs | median gap | worst | within 2% | min per fit |
+|---|---|---|---|---|
+| 32 x 300 / 500 / 600 | +1.5 / +0.7 / +0.5% | +7.8 / +3.5 / +4.2% | 6 / 8 / 8 | 1.8 / 3.0 / 3.6 |
+| 64 x 300 / 500 / 600 | +1.5 / +0.1 / -0.0% | +5.2 / +2.5 / +1.8% | 6 / 10 / 12 | 2.0 / 3.3 / 3.9 |
+| 128 x 300 / 400 / 500 | +0.8 / +0.1 / -0.3% | +3.8 / +1.8 / +1.1% | 9 / 12 / 12 | 2.1 / 2.8 / 3.5 |
+
+On all 110 benchmark cells (results of each version kept in `run_results/*_v1`, `_v2`, `_v3`):
+
+| version | median gap | worst gap | cells > 5% worse | min per fit |
+|---|---|---|---|---|
+| 32 x 600 | +0.4% | +9.8% | 7 | 3.6 |
+| 128 x 400 | +0.3% | +55.6% | 3 | 2.9 |
+| **64 x 500 (used)** | **+0.4%** | **+5.6%** | **1** | **3.3** |
+
+128 x 400 missed a basin on two cells: 400 epochs leave too little time on the whole record.
+
+### How the restarts spread
+
+See [`restart_spread.py`](experiments/restart_spread.py), which records every restart's
 loss over the full record every 25 epochs.
 
 <p align="center"><img src="assets/restart_curves.png" width="820" alt="Restart curves"></p>
 
-- About half the restarts reach the optimum on ODE cells (24 to 32 of 64). The rest get
-  stuck on flat plateaus (local minima) from about epoch 500 on. These are consistent
-  with phase-slip minima, fits that run a cycle ahead or behind. More restarts protect
-  against this, more epochs do not.
-- **Restarts that reach the same optimum disagree on α.** On configurations with
-  reporters only, α errors range from 2% to 65% at equally good fits. This is the sloppy
-  direction of §4.4 observed empirically. With the fusion configuration the restarts
-  agree (5% to 31%).
-- The best fit settles within about 100 epochs of the curriculum reaching the full
-  record (around epoch 1100). The last ~400 epochs change the MSE by less than 0.3%.
-- **The schedule cannot simply be shortened.**
-  - With 600 epochs the optimum is still reached, but only by 3 to 10 of 64 restarts
-    instead of 24 to 32. The early stages decide how many restarts escape bad valleys.
-  - Lowering the final learning rate to 10⁻⁵ instead of 2.5·10⁻⁴ changes nothing at
-    either length.
-  - So the setup stays at 1500 epochs.
+- On ODE cells 7 to 14 of the 64 restarts reach the optimum (within 2% of the MSE at the
+  truth); the rest stay on plateaus consistent with phase-slip minima. The best of 4
+  random restarts is typically within 2% of the MSE at the truth, the best of 8 below it.
+- **Restarts that reach the same optimum disagree on α.** With reporters only, α errors
+  range from 3% to 122% at equally good fits, the sloppy direction of §4.4; with the TetR
+  fusion they agree (3% to 24%).
 
 ## 6. Limitations
 
@@ -487,11 +605,13 @@ loss over the full record every 25 epochs.
   configurations use 3 seeds.
 - **Some model details are idealised.** Fusions do not perturb the circuit, and
   titration is a fixed effective shift.
-- **ABC-SMC is limited by its budget** of 300k simulations. A larger budget would help
-  it, and we did not measure by how much.
+- **ABC-SMC is limited by its budget.** Tripling it (96k to 300k simulations) or changing
+  its population size changed little (§4.6), but it was not run to convergence.
 - **Run time is not a claim.** Methods ran on fixed budgets, not until convergence. Ours
-  took about 10 min per cell (64 restarts), ABC about 4 min, MAGI about 10 min and the
-  PINN about 12 min.
+  takes about 3.3 min per cell (64 restarts x 500 epochs, one CPU thread), ABC about
+  4 min, MAGI about 10 min and the PINN about 14 min.
+- **Real data** come from compressed supplementary movies of one study, 6 to 9 cells
+  per strain.
 
 ## 7. Reproducing
 
@@ -520,7 +640,10 @@ uv run python experiments/circuits_benchmark.py --method gradient,abc,magi,pinn 
 uv run python experiments/real_repressilator.py --workers 6 && uv run python experiments/real_repressilator.py --report
 uv run python experiments/real_improved.py --workers 6 && uv run python experiments/real_improved.py --report
 
-# side experiments
+# side experiments (curriculum and budget: run_results/epoch_budget/)
+uv run python experiments/epoch_budget.py --cells 600 stages,ramp,ramp90,ramp90_coupled
+uv run python experiments/epoch_budget.py --grid 300,400,500,600 32,64,128 ramp90_coupled
+./experiments/rerun_gradient.sh 8                        # rerun everything that depends on the fit
 uv run python experiments/tuning.py --workers 3 && uv run python experiments/tuning.py --report
 uv run python experiments/restart_spread.py --workers 3 && uv run python experiments/restart_spread.py --report
 uv run python experiments/restart_spread.py --workers 3 --epochs 600 --lr-final 1e-5
@@ -553,6 +676,8 @@ uv run python experiments/restart_spread.py --workers 3 --epochs 600 --lr-final 
 6. Rijal K, Mehta P. A differentiable Gillespie algorithm for simulating chemical
    kinetics, parameter estimation, and designing synthetic biological circuits.
    *arXiv* 2407.04865 (2025).
+7. Potvin-Trottier L, Lord ND, Vinnicombe G, Paulsson J. Synchronous long-term oscillations
+   in a synthetic gene circuit. *Nature* 538, 514–517 (2016).
 
 Maturation rates and brightness values come from FPbase (Lambert, *Nat. Methods* 16,
 277–278, 2019). Degradation-tag half-lives come from Andersen et al.,

@@ -1,4 +1,4 @@
-"""How do the 64 restarts of the gradient fit spread out?
+"""How do the restarts of the gradient fit spread out?
 
     python experiments/restart_spread.py --workers 3     run (resumes)
     python experiments/restart_spread.py --report        tables and run_results/restart_spread/restart_curves.png
@@ -22,8 +22,8 @@ OPTIMUM = 1.02  # MSE ratio at or below this: the restart reached the optimum
 
 
 def out_dir(epochs: int, lr_final: float):
-    name = "_".join(([f"epochs{epochs}"] if epochs != 600 else []) + ([f"lrfinal{lr_final:g}"] if lr_final != 2.5e-4 else []))
-    return RESULTS / "restart_spread" / name  # the first study (64 x 1500, staged): restart_spread/v1/
+    name = "_".join(([f"epochs{epochs}"] if epochs != 500 else []) + ([f"lrfinal{lr_final:g}"] if lr_final != 2.5e-4 else []))
+    return RESULTS / "restart_spread" / name  # earlier versions: restart_spread/v1 (64 x 1500), v2 (32 x 600)
 
 
 def job_file(folder, name: str, kind: str, seed: int):
@@ -113,7 +113,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--threads", type=int, default=3)
-    ap.add_argument("--epochs", type=int, default=600)
+    ap.add_argument("--epochs", type=int, default=500)
     ap.add_argument("--lr-final", type=float, default=2.5e-4)
     ap.add_argument("--one", nargs=3, metavar=("CONFIG", "KIND", "SEED"))
     ap.add_argument("--report", action="store_true")

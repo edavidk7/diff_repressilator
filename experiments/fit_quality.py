@@ -322,7 +322,7 @@ def fig_controls(refined, abc):
 def fig_budget(abc) -> dict:
     """Fit against trajectory solves: best of k restarts of backprop (k x epochs forward + backward solves,
     from the restart spread) and ABC-SMC per particle count and budget. Median over cells, bars: range."""
-    ks, out = [1, 2, 4, 8, 16, 32, 64], {}
+    ks, out = [1, 2, 4, 8, 16, 32, 64, 128], {}
     fig, axes = plt.subplots(1, 2, figsize=(11, 3.9), sharey=True)
     for ax, kind in zip(axes, KINDS):
         spread = [json.loads(p.read_text()) for p in (RESULTS / "restart_spread").glob(f"*__{kind}__seed*.json")]

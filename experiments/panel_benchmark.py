@@ -23,7 +23,7 @@ from common import KINDS, MAIN_PANELS, PANELS, RESULTS, cell, current, run_pool,
 
 OUT = RESULTS / "panel_benchmark"
 PARAMS = ("alpha", "n", "beta", "alpha_0")
-# The method's settings are fit_gradient's defaults (ramp curriculum, coupled schedule, 32 x 600; chosen on fit
+# The method's settings are fit_gradient's defaults (ramp curriculum, coupled schedule, 64 x 500; chosen on fit
 # quality, never on truth). The first benchmark used these (results in */gradient_v1, */laplace_v1):
 GRADIENT_SETTINGS: dict = {}
 V1_SETTINGS: dict = {"loss": "huber", "schedule": "cosine", "curriculum": "stages", "restarts": 64, "epochs": 1500}

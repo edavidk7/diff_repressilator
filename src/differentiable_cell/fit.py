@@ -133,27 +133,20 @@ class Problem:
         return per_point.mean((-1, -2))
 
 
-def fit_gradient(problem: Problem, restarts: int = 32, epochs: int = 600, lr: float = 0.05,
+def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: float = 0.05,
                  lr_final: float = 2.5e-4, stages=(0.25, 0.5, 1.0), curriculum: str = "ramp",
                  start_fraction: float = 0.1, ramp=(0.1, 0.9), seed: int = 0, loss: str = "huber",
                  optimizer: str = "adam", schedule: str = "coupled", return_all: bool = False,
                  history: list | None = None, history_every: int = 25):
     """Backpropagation through the solver from ``restarts`` prior draws, optimised as one batch.
 
-    Defaults (the method): Huber loss, Adam at lr 0.05 while the window grows from 10% of the record (held for
-    the first 10% of epochs) to all of it at 90%, then a cosine anneal to 2.5e-4 on the whole record; 32
-    restarts x 600 epochs. Chosen on fit quality over 12 cells (experiments/epoch_budget.py). Until then the
-    benchmark used 64 restarts x 1500 epochs, curriculum "stages", schedule "cosine" (results in *_v1).
-
-    The loss first sees part of the record: a period error becomes a phase error that grows over the record
-    and flattens the loss. ``curriculum="stages"``: the fractions ``stages`` in equal thirds of training;
-    ``"linear"``: from ``start_fraction`` at the first epoch to the whole record at the last; ``"ramp"``: hold
-    ``start_fraction`` until the fraction ``ramp[0]`` of training, rise linearly to the whole record at
-    ``ramp[1]``, then hold it. ``optimizer``: adam, rmsprop or sgd (Nesterov); ``schedule``: lr from ``lr`` to
-    ``lr_final``, "exp" or "cosine" over training, or "coupled": ``lr`` while the window grows, then a cosine to
-    ``lr_final`` over the epochs on the whole record. The best restart is chosen by
-    full-record MSE whatever the training loss. Returns its theta (all restarts' with ``return_all``) and
-    every restart's final MSE; ``history`` collects ``(epoch, MSE per restart, theta per restart)``.
+    The loss first sees part of the record (a period error grows into a phase error that flattens the loss):
+    "ramp" (default) holds ``start_fraction`` for the first ``ramp[0]`` of training and reaches the whole record
+    at ``ramp[1]``; "linear" grows from the first epoch to the last; "stages" uses the fractions ``stages`` in
+    equal thirds. ``schedule``: "coupled" (default) keeps ``lr`` while the window grows, then anneals (cosine)
+    to ``lr_final`` on the whole record; "cosine" and "exp" decay over all of training. The best restart is
+    chosen by full-record MSE. Returns its theta (every restart's with ``return_all``) and every restart's
+    final MSE; ``history`` collects ``(epoch, MSE per restart, theta per restart)`` every ``history_every``.
     """
     g = torch.Generator().manual_seed(seed)
     z = problem.to_z(problem.sample_prior(restarts, g)).requires_grad_(True)

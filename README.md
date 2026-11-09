@@ -509,7 +509,7 @@ The other methods' estimates mostly do not oscillate (Hill coefficients of 1.5-1
 our 2.7). Our protein dilution rate β = 0.075 is consistent across cells and implies a
 doubling time of about 27 min and a period of about 15 generations (the paper reports
 13.8). A single fit of each whole 54-h record (about 8 periods) stays in phase (NRMSE 0.166
-against 0.287 for the sinusoid). Two reporter maturation rates end at their prior bounds.
+against 0.287 for the sinusoid). The mKate2 maturation rate ends at its prior bound.
 
 ### Conclusion
 

@@ -140,6 +140,48 @@ def report() -> None:
               f"period fit {np.median([r['period_fit_h'] for r in full]):.2f} h (data {np.median([r['period_data_h'] for r in full]):.2f} h), "
               f"beta {np.median([r['estimate']['beta'] for r in full]):.3g}")
         plot(full, "fits_whole_record.png" if m == "gradient" else f"fits_whole_record_{m}.png")
+    figure_paper()
+
+
+def figure_paper() -> None:
+    """Paper figures: every method on cell 0's first window (with forecast); whole-record fits of two cells."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    colours, labels = ["#c0392b", "#27ae60", "#2e6fd8"], ["mKate2 (CI)", "Venus (TetR)", "CFP (LacI)"]
+    names = {"gradient": "diff. ODE", "abc": "ABC-SMC", "magi": "MAGI", "pinn": "inverse PINN"}
+
+    def draw(ax, r, n):
+        h = (r["start"] + np.arange(len(r["y"]))) * 8 / 60
+        y, pred = np.array(r["y"]), np.array(r["pred"])
+        for j, col in enumerate(colours):
+            ax.scatter(h, y[:, j], s=2, color=col, alpha=0.5, linewidths=0)
+            ax.plot(h[:n + 1], pred[:n + 1, j], color=col, lw=1.2, label=labels[j])
+            if len(h) > n + 1:
+                ax.plot(h[n:], pred[n:, j], color=col, lw=1.2, ls="--")
+        ax.grid(color="#e0e0e0", lw=0.5)
+        ax.tick_params(labelsize=8)
+
+    fig, axes = plt.subplots(len(METHODS), 1, figsize=(7, 1.55 * len(METHODS)), sharex=True)
+    for ax, m in zip(axes, METHODS):
+        r = json.loads(job_file(m, 0, 0).read_text())
+        draw(ax, r, WINDOW)
+        ax.set_title(f"{names[m]}: NRMSE {r['nrmse_fit']:.3f}, forecast {r['nrmse_forecast']:.3f}", loc="left", fontsize=9)
+    axes[0].legend(frameon=False, fontsize=7, ncol=3, loc="upper right")
+    axes[-1].set_xlabel("time [h]")
+    fig.tight_layout()
+    fig.savefig(OUT / "methods_cell0.pdf")
+    fig, axes = plt.subplots(2, 1, figsize=(13, 3.6), sharex=True)
+    for ax, tr in zip(axes, (0, 1)):
+        r = json.loads(job_file("gradient", tr, 0, FULL_FRAMES).read_text())
+        draw(ax, r, FULL_FRAMES)
+        ax.set_ylabel(f"cell {tr}", fontsize=8)
+    axes[-1].set_xlabel("time [h]")
+    fig.tight_layout()
+    fig.savefig(OUT / "whole_record.pdf")
+    print(OUT / "methods_cell0.pdf", OUT / "whole_record.pdf")
 
 
 def plot(rows, name: str = "fits.png") -> None:

@@ -257,6 +257,8 @@ $$\mathcal{L} = \frac{1}{G\cdot C}\sum_{i=1}^{G\cdot C} H_\delta(r_i)$$
 - The **learning rate follows the window**. It stays at 0.05 while the window grows, so
   restarts can still move between valleys, and anneals along a cosine to 2.5·10⁻⁴ during
   the final 10% of epochs on the whole record, which settles each restart.
+- Growing-window curricula ("growing fits") are established for ODE training [8, 9]; what we add is coupling the
+  learning rate to the window, and batching many restarts.
 - This is about 3.5× cheaper than the first version (1500 epochs, a 25% / 50% / 100%
   curriculum and a cosine learning rate over all of training) and fits as well; see §5.
 
@@ -684,6 +686,10 @@ uv run python experiments/restart_spread.py --workers 3 --epochs 600 --lr-final 
    *arXiv* 2407.04865 (2025).
 7. Potvin-Trottier L, Lord ND, Vinnicombe G, Paulsson J. Synchronous long-term oscillations
    in a synthetic gene circuit. *Nature* 538, 514–517 (2016).
+8. Rackauckas C, Innes M, Ma Y, Bettencourt J, White L, Dixit V. DiffEqFlux.jl: a Julia library for neural
+   differential equations. *arXiv* 1902.02376 (2019).
+9. Persson S, Fabrini G, Snelling B, Fröhlich F. Curriculum multiple shooting for robust training of neural and
+   universal differential equations. *arXiv* 2608.05777 (2026).
 
 Maturation rates and brightness values come from FPbase (Lambert, *Nat. Methods* 16,
 277–278, 2019). Degradation-tag half-lives come from Andersen et al.,

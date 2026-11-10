@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 from common import RESULTS, run_pool, setup_torch
+import style  # noqa: F401  (applies the figure style)
 
 OUT = RESULTS / "circuits"
 SEEDS = range(5)
@@ -72,7 +73,8 @@ def bounds(key: str) -> dict:
 
 METHODS = ["gradient", "abc", "magi", "pinn"]
 LABEL = {"gradient": "diff. ODE", "abc": "ABC-SMC", "magi": "MAGI", "pinn": "inverse PINN"}
-COLOUR = {"gradient": "#2a78d6", "abc": "#eb6834", "magi": "#e87ba4", "pinn": "#4a3aa7"}
+COLOUR = style.METHOD_COLOUR
+SPECIES_COLOUR = [style.PALETTE["ink"], style.PALETTE["gold"]]  # observed species of a circuit
 
 
 def report() -> None:
@@ -118,14 +120,13 @@ def figure_all(rows, seed: int = 0) -> None:
             h, hf = np.array(r["fine_t"]) * c.minutes_per_unit / 60, np.array(r["t"]) * c.minutes_per_unit / 60
             for k, sp in enumerate(c.observed):
                 ax.plot(h, np.array(r["truth_fine"])[:, k], color="black", lw=0.9, alpha=0.35)
-                ax.scatter(hf, np.array(r["y"])[:, k], s=2, alpha=0.6, linewidths=0, color=f"C{k}")
+                ax.scatter(hf, np.array(r["y"])[:, k], s=2, alpha=0.6, linewidths=0, color=SPECIES_COLOUR[k])
                 fine = np.array(r["fit_fine"], dtype=float)[:, k]
                 if np.isfinite(fine).all():
-                    ax.plot(h, fine, lw=1.3, color=f"C{k}", label=c.species[sp])
+                    ax.plot(h, fine, lw=1.3, color=SPECIES_COLOUR[k], label=c.species[sp])
             ax.text(0.98, 0.95, f"{r['loss_fit'] / r['loss_truth']:.3g}x", transform=ax.transAxes, ha="right", va="top",
                     fontsize=8, bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1))
             ax.tick_params(labelsize=7)
-            ax.grid(color="#e0e0e0", lw=0.5)
             if i == 0:
                 ax.set_title(LABEL[m], fontsize=11, color=COLOUR[m], fontweight="bold")
             if j == 0:
@@ -134,7 +135,7 @@ def figure_all(rows, seed: int = 0) -> None:
                 ax.set_xlabel("time [h]", fontsize=8)
     fig.tight_layout()
     for ext in ("png", "pdf"):
-        fig.savefig(OUT / f"fits_all.{ext}", dpi=200)
+        fig.savefig(OUT / f"fits_all.{ext}")
     print(OUT / "fits_all.pdf")
 
 
@@ -158,18 +159,17 @@ def plot(rows, key: str, seed: int = 0) -> None:
         h, hf = np.array(r["fine_t"]) * c.minutes_per_unit / 60, np.array(r["t"]) * c.minutes_per_unit / 60
         for j, i in enumerate(c.observed):
             ax.plot(h, np.array(r["truth_fine"])[:, j], color="black", lw=0.9, alpha=0.35)
-            ax.scatter(hf, np.array(r["y"])[:, j], s=3, alpha=0.6, linewidths=0, color=f"C{j}")
+            ax.scatter(hf, np.array(r["y"])[:, j], s=3, alpha=0.6, linewidths=0, color=SPECIES_COLOUR[j])
             fine = np.array(r["fit_fine"], dtype=float)[:, j]
             if np.isfinite(fine).all():
-                ax.plot(h, fine, lw=1.4, color=f"C{j}", label=c.species[i])
+                ax.plot(h, fine, lw=1.4, color=SPECIES_COLOUR[j], label=c.species[i])
         ax.set_title(f"{LABEL[m]}: fit {r['loss_fit'] / r['loss_truth']:.3g}x", loc="left", fontsize=10, color=COLOUR[m])
         ax.set_xlabel("time [h]")
-        ax.grid(color="#e0e0e0", lw=0.5)
     axes[0, 0].legend(frameon=False, fontsize=8)
     fig.suptitle(f"{c.name}, seed {seed} (dots: frames; grey: hidden truth; line: ODE at the estimate)",
                  x=0.01, ha="left", fontsize=10)
     fig.tight_layout()
-    fig.savefig(OUT / f"fits_{key}.png", dpi=110)
+    fig.savefig(OUT / f"fits_{key}.png")
     print(OUT / f"fits_{key}.png")
 
 

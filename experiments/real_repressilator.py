@@ -23,6 +23,7 @@ import numpy as np
 import torch
 
 from common import RESULTS, run_pool, setup_torch
+import style  # noqa: F401  (applies the figure style)
 
 OUT = RESULTS / "real_repressilator"
 URL = ("https://static-content.springer.com/esm/art%3A10.1038%2Fnature19841/MediaObjects/"
@@ -133,14 +134,13 @@ def plot(rows, name: str = "fits.png") -> None:
     for ax, tr in zip(axes[:, 0], trenches):
         for r in (r for r in rows if r["trench"] == tr):
             h = (r["start"] + np.arange(len(r["y"]))) * 5 / 60
-            ax.scatter(h, r["y"], s=3, color="#3f7f2a", alpha=0.6, linewidths=0)
-            ax.plot(h[:WINDOW + 1], r["pred"][:WINDOW + 1], color="#2a78d6", lw=1.3)
-            ax.plot(h[WINDOW:], r["pred"][WINDOW:], color="#2a78d6", lw=1.3, ls="--")
+            ax.scatter(h, r["y"], s=3, color=style.CHANNEL_COLOUR["tet"], alpha=0.6, linewidths=0)
+            ax.plot(h[:WINDOW + 1], r["pred"][:WINDOW + 1], color=style.PALETTE["blue_main"], lw=1.3)
+            ax.plot(h[WINDOW:], r["pred"][WINDOW:], color=style.PALETTE["blue_main"], lw=1.3, ls="--")
         ax.set_ylabel(f"cell {tr}", fontsize=8)
-        ax.grid(color="#e0e0e0", lw=0.5)
     axes[-1, 0].set_xlabel("time [h]  (dots: mother-cell GFP; line: fit; dashed: 2-h forecast)")
     fig.tight_layout()
-    fig.savefig(OUT / name, dpi=110)
+    fig.savefig(OUT / name)
     print(OUT / name)
 
 

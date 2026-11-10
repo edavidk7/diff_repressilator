@@ -12,6 +12,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import style  # noqa: F401  (applies the figure style)
 import torch
 
 from differentiable_cell.reporter_sim import FRAME_MIN, box1_truth, generate
@@ -22,8 +23,8 @@ torch.set_default_dtype(torch.float64)
 OUT = FIGURES
 INK = "black"
 GRID = (179 / 255, 179 / 255, 179 / 255)  # #b3b3b3, as in the schematics
-CHANNELS = [("mJuniper (LacI reporter)", "#1f8a7a"), ("GFP (TetR reporter)", "#3f7f2a"),
-            ("mScarlet-I3 (CI reporter)", "#b8323f")]
+CHANNELS = [("mJuniper (LacI reporter)", style.CHANNEL_COLOUR["lac"]), ("GFP (TetR reporter)", style.CHANNEL_COLOUR["tet"]),
+            ("mScarlet-I3 (CI reporter)", style.CHANNEL_COLOUR["cI"])]
 HOURS = 10.0
 
 
@@ -47,7 +48,6 @@ def draw(d, title: str, name: str, dotted: bool) -> None:
     ax.set_xlabel("time [h]", color=INK, fontsize=11)
     ax.set_ylabel("fluorescence [K$_M$ units]", color=INK, fontsize=11)
     ax.set_xlim(0, HOURS)
-    ax.grid(color=GRID, lw=0.8)
     ax.set_axisbelow(True)
     ax.tick_params(colors=INK, labelsize=10)
     for side in ("top", "right"):
@@ -59,7 +59,7 @@ def draw(d, title: str, name: str, dotted: bool) -> None:
         text.set_color(INK)
     fig.tight_layout()
     for ext in ("png", "pdf", "svg"):
-        fig.savefig(OUT / f"{name}.{ext}", dpi=200, transparent=True)
+        fig.savefig(OUT / f"{name}.{ext}")
     plt.close(fig)
     print(OUT / f"{name}.png")
 

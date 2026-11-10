@@ -26,6 +26,7 @@ from scipy.stats import wilcoxon
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import style  # noqa: F401  (applies the figure style)
 
 from common import MAIN_PANELS, RESULTS, current
 
@@ -34,11 +35,11 @@ HOURS_PER_UNIT = 2.0 / math.log(2) / 60
 SEEDS = 13  # the seeds every method finished on both kinds of cell
 METHODS = ["gradient", "abc", "magi", "pinn"]
 LABEL = {"gradient": "diff. ODE", "abc": "ABC-SMC", "magi": "MAGI", "pinn": "inverse PINN"}
-COLOUR = {"gradient": "#2a78d6", "abc": "#eb6834", "magi": "#e87ba4", "pinn": "#4a3aa7"}
+COLOUR = style.METHOD_COLOUR
 KINDS = {"ode": "ODE cells", "ssa": "Gillespie cells"}
 CH_LABEL = {"lac": "mJuniper (P$_{Llac}$)", "tet": "GFP (P$_{Ltet}$)", "cI": "mScarlet-I3 (λP$_R$)",
             "TetR-fusion": "TetR fusion"}
-CH_COLOUR = {"lac": "#1baf7a", "tet": "#3f7f2a", "cI": "#b8323f", "TetR-fusion": "#c98a00"}
+CH_COLOUR = style.CHANNEL_COLOUR
 
 
 # ---------------------------------------------------------------- metrics
@@ -160,8 +161,7 @@ def best_of_k(mse_ratio: list, k: int, draws: int = 2000) -> float:
 
 # ---------------------------------------------------------------- figures
 
-def style(ax):
-    ax.grid(color="#d9d9d9", lw=0.6)
+def tidy(ax):
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -189,7 +189,7 @@ def method_legend(fig, extra=(), **kw):
 def save(fig, name):
     OUT.mkdir(parents=True, exist_ok=True)
     for ext in ("png", "pdf"):
-        fig.savefig(OUT / f"{name}.{ext}", dpi=200)
+        fig.savefig(OUT / f"{name}.{ext}")
     plt.close(fig)
 
 
@@ -209,7 +209,7 @@ def fig_overview(mets):
             ax.set_yscale("log")
             ax.set_xticks(range(len(MAIN_PANELS)))
             ax.set_xticklabels(MAIN_PANELS if row == 1 else [""] * len(MAIN_PANELS))
-            style(ax)
+            tidy(ax)
             if row == 0:
                 ax.set_title(f"{KINDS[kind]} (n = {len(cells(mets, kind))})", loc="left", fontsize=12)
     axes[0, 0].set_ylabel("NRMSE to the frames")
@@ -235,7 +235,7 @@ def fig_gallery(rows, mets, kind, seed):
                     ax.plot(ft, fit[:, c], color=CH_COLOUR[ch], lw=1.4, label=CH_LABEL[ch])
             ax.text(0.99, 0.97, f"NRMSE {mets[(kind, config, seed)][m]['nrmse_hidden']:.3f}", transform=ax.transAxes,
                     ha="right", va="top", fontsize=8, bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1))
-            style(ax)
+            tidy(ax)
             ax.tick_params(labelsize=8)
             if i == 0:
                 ax.set_title(LABEL[m], fontsize=12, color=COLOUR[m], fontweight="bold")
@@ -262,7 +262,7 @@ def fig_over_time(mets):
         ax.set_yscale("log")
         ax.set_xlabel("time [h]")
         ax.set_title(KINDS[kind], loc="left")
-        style(ax)
+        tidy(ax)
     axes[0].set_ylabel("NRMSE to hidden trajectory\n(1-h windows)")
     axes[1].legend(frameon=False, loc="lower right", fontsize=9)
     fig.tight_layout()
@@ -285,7 +285,7 @@ def fig_timing_shape(mets):
         ax.set_xticks([0, 1])
         ax.set_xticklabels(list(KINDS.values()))
         ax.set_title(label, loc="left", fontsize=11)
-        style(ax)
+        tidy(ax)
     method_legend(fig)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     save(fig, "fit_timing_shape")
@@ -295,7 +295,7 @@ def fig_controls(refined, abc):
     """Fit of each estimate as reported, after a start-only re-fit and after local refinement."""
     stages = [("loss_saved", "as reported", 1.0), ("loss_start_only", "start re-fitted", 0.65),
               ("loss_local", "locally refined", 0.35)]
-    gold = "#c9a227"
+    gold = style.PALETTE["gold"]
     fig, axes = plt.subplots(1, 2, figsize=(11, 3.9), sharey=True)
     for ax, kind in zip(axes, KINDS):
         for i, m in enumerate(METHODS):
@@ -310,7 +310,7 @@ def fig_controls(refined, abc):
         ax.set_xticks(range(len(METHODS)))
         ax.set_xticklabels([LABEL[m] for m in METHODS])
         ax.set_title(KINDS[kind], loc="left")
-        style(ax)
+        tidy(ax)
     axes[0].set_ylabel("MSE / MSE at true parameters")
     handles = [plt.Rectangle((0, 0), 1, 1, color=(1 - 0.7 * s,) * 3) for _, _, s in stages]
     fig.legend(handles + [plt.Rectangle((0, 0), 1, 1, color=gold)], [l for _, l, _ in stages] + ["ABC best particle"],
@@ -352,7 +352,7 @@ def fig_budget(abc) -> dict:
         ax.set_yscale("log")
         ax.set_xlabel("trajectory solves per cell")
         ax.set_title(KINDS[kind], loc="left")
-        style(ax)
+        tidy(ax)
     axes[0].set_ylabel("MSE / MSE at true parameters")
     handles = [plt.Line2D([], [], color=COLOUR["gradient"], marker="o", ms=4),
                plt.Line2D([], [], color=COLOUR["abc"], marker="s", mfc="white", ls="none"),

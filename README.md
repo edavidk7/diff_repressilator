@@ -1,18 +1,23 @@
-# A differentiable simulation is all you need for repressilator identification from sparse reporters
+# Backpropagation through the solver: a simple, fast estimator of gene-circuit parameters from single-cell time series
 
 David Korcak (dkorcak@ethz.ch) · MSc, Department of Computer Science, ETH Zürich
 
-Inferring a gene circuit's parameters from sparse single-cell observations usually
-relies on dedicated estimators, optionally with a simulation. Using the repressilator,
-we show that **backpropagation through a differentiable simulation itself matches or
-outperforms them**, and that its estimates reproduce the time series far better (§4.5,
-§4.6). The advantage is largest for oscillators: on other circuits it is competitive
-rather than dominant (§4.7), and on real mother-machine recordings of the improved
-repressilator it is the only one of four methods whose estimates oscillate (§4.8). What
-limits inference is the choice of reporters, which we assess with an identifiability
-analysis.
+Inferring a gene circuit's parameters from single-cell time-lapse data usually relies on dedicated estimators:
+likelihood-free sampling (ABC-SMC), Gaussian-process gradient matching (MAGI) or physics-informed neural networks.
+We use a simpler approach built on standard deep-learning tooling: integrate the circuit's ODE model with a
+differentiable solver and fit parameters and starting state to the frames by **backpropagation**, from 64 restarts in
+parallel, with a curriculum and a learning rate coupled to it (about 3 min per cell).
 
-<p align="center"><a href="docs/poster.pdf"><img src="assets/poster.png" width="520" alt="Poster"></a></p>
+On five circuits (the repressilator, negative autoregulation, a toggle switch, a Goodwin oscillator and an incoherent
+feed-forward loop) it gives the **best or tied-best fit on every one** and is the fastest of the four methods. The
+advantage is largest on **oscillators**, where the other estimates drift in phase or stop oscillating (§4.5, §4.7), and
+on **real mother-machine recordings** of the improved repressilator it is the only method whose estimates oscillate
+(§4.8). On non-oscillating circuits ABC-SMC or the solver-free methods can match it. Parameter accuracy is then set by
+the reporters, which an identifiability analysis predicts (§4.4). The repressilator is the detailed case study below.
+
+<p align="center"><img src="assets/circuits_schematic.png" width="900" alt="The five circuits"></p>
+
+<p align="center"><a href="docs/poster.pdf"><img src="assets/poster.png" width="520" alt="Poster"></a><br><sub>The poster (first version of the fit, repressilator only).</sub></p>
 
 ## Contents
 
@@ -628,7 +633,8 @@ uv run python experiments/plot_results.py                # results_main: seeds c
 uv run python experiments/plot_fit_comparison.py
 uv run python experiments/identifiability.py             # add --replot to restyle without recomputing
 uv run python experiments/poster_sim_plots.py
-uv run python experiments/dga_gradient_growth.py
+uv run python experiments/dga_gradient_growth.py            # add --replot to restyle without recomputing
+uv run python experiments/plot_schematics.py               # method and circuit schematics (style: experiments/style.py)
 
 # how well each estimate fits the time series, and controls for that comparison (run_results/fit_quality/)
 uv run python experiments/fit_controls.py abc --workers 2 && uv run python experiments/fit_controls.py refine --workers 4

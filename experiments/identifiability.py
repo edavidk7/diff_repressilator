@@ -18,6 +18,7 @@ import torch
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import style  # noqa: F401  (applies the figure style)
 from matplotlib.ticker import FuncFormatter
 
 from differentiable_cell.fit import Problem
@@ -93,13 +94,12 @@ def plot(u: dict) -> None:
     ax.text(0, 1.02, "Fisher information at the true parameters (dashed: 10%)", transform=ax.transAxes,
             fontsize=13, va="bottom")
     ax.legend(frameon=False, ncol=3, loc="lower right", bbox_to_anchor=(1.0, 0.99), fontsize=15, handlelength=1.2)
-    ax.grid(axis="y", color="#b3b3b3", lw=0.8)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     fig.tight_layout()
     for ext in ("png", "pdf", "svg"):
-        fig.savefig(FIGURES / f"identifiability.{ext}", dpi=200, transparent=True)
+        fig.savefig(FIGURES / f"identifiability.{ext}")
     print(FIGURES / "identifiability.png")
 
 

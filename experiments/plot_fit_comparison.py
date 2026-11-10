@@ -15,6 +15,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import style  # noqa: F401  (applies the figure style)
 
 from common import FIGURES, RESULTS
 
@@ -22,7 +23,7 @@ IN, OUT = RESULTS / "panel_benchmark", FIGURES
 CELL = "2_reporters__ssa__seed1.json"
 HOURS_PER_UNIT = 2.0 / 0.6931471805599453 / 60  # model time unit = mRNA lifetime
 GRID = (179 / 255, 179 / 255, 179 / 255)
-CHANNELS = {"tet": ("GFP (TetR reporter)", "#3f7f2a"), "cI": ("mScarlet-I3 (CI reporter)", "#b8323f")}
+CHANNELS = {"tet": ("GFP (TetR reporter)", style.CHANNEL_COLOUR["tet"]), "cI": ("mScarlet-I3 (CI reporter)", style.CHANNEL_COLOUR["cI"])}
 METHODS = [("gradient", "diff. ODE (ours)"), ("abc", "ABC-SMC")]
 
 
@@ -44,7 +45,6 @@ def main() -> None:
                 fontsize=13, va="bottom")
         ax.set_xlabel("time [h]", fontsize=14)
         ax.set_xlim(0, frames[-1])
-        ax.grid(color=GRID, lw=0.8)
         ax.set_axisbelow(True)
         ax.tick_params(labelsize=12)
         for side in ("top", "right"):
@@ -56,7 +56,7 @@ def main() -> None:
     axes[1].legend(handles, labels, frameon=False, fontsize=12, loc="upper left", bbox_to_anchor=(1.0, 1.0))
     fig.tight_layout()
     for ext in ("png", "pdf", "svg"):
-        fig.savefig(OUT / f"fit_comparison.{ext}", dpi=200, transparent=True)
+        fig.savefig(OUT / f"fit_comparison.{ext}")
     print(OUT / "fit_comparison.png")
 
 

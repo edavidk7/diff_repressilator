@@ -22,6 +22,7 @@ import numpy as np
 import torch
 
 from common import RESULTS, run_pool, setup_torch
+import style  # noqa: F401  (applies the figure style)
 from real_repressilator import sinusoid_fit
 
 OUT = RESULTS / "real_improved"
@@ -150,7 +151,7 @@ def figure_paper() -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    colours, labels = ["#c0392b", "#27ae60", "#2e6fd8"], ["mKate2 (CI)", "Venus (TetR)", "CFP (LacI)"]
+    colours, labels = style.RGB_REPORTERS, ["mKate2 (CI)", "Venus (TetR)", "CFP (LacI)"]
     names = {"gradient": "diff. ODE", "abc": "ABC-SMC", "magi": "MAGI", "pinn": "inverse PINN"}
 
     def draw(ax, r, n):
@@ -161,7 +162,6 @@ def figure_paper() -> None:
             ax.plot(h[:n + 1], pred[:n + 1, j], color=col, lw=1.2, label=labels[j])
             if len(h) > n + 1:
                 ax.plot(h[n:], pred[n:, j], color=col, lw=1.2, ls="--")
-        ax.grid(color="#e0e0e0", lw=0.5)
         ax.tick_params(labelsize=8)
 
     fig, axes = plt.subplots(len(METHODS), 1, figsize=(7, 1.55 * len(METHODS)), sharex=True)
@@ -190,7 +190,7 @@ def plot(rows, name: str = "fits.png") -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    colours = ["#c0392b", "#27ae60", "#2e6fd8"]
+    colours = style.RGB_REPORTERS
     trenches = sorted({r["trench"] for r in rows})
     fig, axes = plt.subplots(len(trenches), 1, figsize=(14, 2.0 * len(trenches)), sharex=True, squeeze=False)
     for ax, tr in zip(axes[:, 0], trenches):
@@ -204,10 +204,9 @@ def plot(rows, name: str = "fits.png") -> None:
                     ax.plot(h[:n + 1], pred[:n + 1, j], color=col, lw=1.2)
                     ax.plot(h[n:], pred[n:, j], color=col, lw=1.2, ls="--")
         ax.set_ylabel(f"cell {tr}", fontsize=8)
-        ax.grid(color="#e0e0e0", lw=0.5)
     axes[-1, 0].set_xlabel("time [h]  (dots: mKate2 / Venus / CFP of the mother cell; line: fit; dashed: 4-h forecast)")
     fig.tight_layout()
-    fig.savefig(OUT / name, dpi=110)
+    fig.savefig(OUT / name)
     print(OUT / name)
 
 

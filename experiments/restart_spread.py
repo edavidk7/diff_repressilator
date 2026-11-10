@@ -14,6 +14,7 @@ import statistics
 import time
 
 from common import KINDS, MAIN_PANELS, RESULTS, cell, run_pool, setup_torch, slug, true_theta
+import style  # noqa: F401  (applies the figure style)
 from panel_benchmark import GRADIENT_SETTINGS
 
 CELLS = [(name, kind, 0) for kind in KINDS for name in MAIN_PANELS]
@@ -92,11 +93,11 @@ def plot(rows, folder, epochs: int) -> None:
         curves = list(zip(*[h["mse_ratio"] for h in r["history"]]))
         best = min(range(len(curves)), key=lambda i: curves[i][-1])
         for i, c in enumerate(curves):
-            ax.plot(x, c, color="#325ba9" if i == best else "#abbddc", lw=2 if i == best else 0.7,
+            ax.plot(x, c, color=style.PALETTE["blue_main"] if i == best else style.PALETTE["blue_secondary"], lw=2 if i == best else 0.7,
                     zorder=3 if i == best else 1)
-        ax.axhline(1.0, color="#325ba9", lw=0.8, ls="--")
+        ax.axhline(1.0, color=style.PALETTE["blue_main"], lw=0.8, ls="--")
         for e in (int(0.1 * epochs), int(0.9 * epochs)):  # the window starts growing / reaches the full record
-            ax.axvline(e, color="#abbddc", lw=0.8, ls=":")
+            ax.axvline(e, color=style.PALETTE["blue_secondary"], lw=0.8, ls=":")
         ax.set_yscale("log")
         ax.set_ylim(0.8 * min(min(c) for c in curves), 1e3)
         ax.set_title(f"{r['panel']}, {'ODE' if r['kind'] == 'ode' else 'Gillespie'} cell", loc="left")
@@ -105,7 +106,7 @@ def plot(rows, folder, epochs: int) -> None:
     for ax in axes[:, 0]:
         ax.set_ylabel("MSE / MSE at truth")
     fig.tight_layout()
-    fig.savefig(folder / "restart_curves.png", dpi=130)
+    fig.savefig(folder / "restart_curves.png")
     print(folder / "restart_curves.png")
 
 

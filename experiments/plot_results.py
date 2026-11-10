@@ -15,6 +15,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import style  # noqa: F401  (applies the figure style)
 from matplotlib.ticker import FuncFormatter
 
 from common import FIGURES, MAIN_PANELS, PANELS, RESULTS, current
@@ -24,22 +25,19 @@ PERCENT = FuncFormatter(lambda v, _: f"{v:g}%")
 IN, OUT = RESULTS / "panel_benchmark", FIGURES
 MINUTES_PER_UNIT = 2.0 / 0.6931471805599453  # model time unit = mRNA lifetime
 
-METHOD_COLOUR = {"gradient": "#2a78d6", "laplace": "#1baf7a", "abc": "#eb6834", "magi": "#e87ba4",
-                 "pinn": "#4a3aa7", "dga": "#6b6b6b"}
+METHOD_COLOUR = style.METHOD_COLOUR
 # The results figure's methods, in slot order. DGA has no fits (its gradients explode, see
 # dga_gradient_growth.py): its slots carry a cross instead of a box.
 METHOD_ORDER = ["gradient", "abc", "magi", "pinn", "dga"]
 NOT_RUN = {"dga"}
 METHOD_LABEL = {"gradient": "diff. ODE (ours)", "laplace": "backprop + Laplace", "abc": "ABC-SMC",
                 "magi": "MAGI", "pinn": "PINN", "dga": "DGA"}
-CHANNEL_COLOUR = {"lac": "#1baf7a", "tet": "#008300", "cI": "#e34948",
-                  "LacI-fusion": "#4a3aa7", "TetR-fusion": "#eda100", "CI-fusion": "#e87ba4"}
+CHANNEL_COLOUR = style.CHANNEL_COLOUR
 PARAMS = [("alpha", "α"), ("n", "n"), ("beta", "β"), ("alpha_0", "α₀")]
 PANEL_ORDER = list(PANELS)
 
 
-def style(ax):
-    ax.grid(color="#e6e6e1", lw=0.6)
+def tidy(ax):
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
 
@@ -58,11 +56,11 @@ def timeseries(rows):
             ft = [x * MINUTES_PER_UNIT for x in r["fine_t"]]
             for c, ch in enumerate(r["channels"]):
                 ax = axes[i, c]
-                ax.plot(ft, [row[c] for row in r["truth_fine"]], color="#9a9a93", lw=1.2, label="truth (hidden)")
+                ax.plot(ft, [row[c] for row in r["truth_fine"]], color=style.PALETTE["grey"], lw=1.2, label="truth (hidden)")
                 ax.plot(ft, [row[c] for row in r["fit_fine"]], color=CHANNEL_COLOUR[ch], lw=1.8, label="fit")
                 ax.scatter(t, [row[c] for row in r["y"]], s=7, color=CHANNEL_COLOUR[ch], alpha=0.55,
                            linewidths=0, label="data (5-min frames)")
-                style(ax)
+                tidy(ax)
                 if i == 0:
                     ax.set_title(ch, loc="left", fontsize=10)
                 if c == 0:
@@ -76,7 +74,7 @@ def timeseries(rows):
         fig.tight_layout()
         path = OUT / "timeseries" / method / f"{''.join(ch if ch.isalnum() else '_' for ch in name)}__{kind}.png"
         path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(path, dpi=110)
+        fig.savefig(path)
         plt.close(fig)
 
 
@@ -110,21 +108,21 @@ def errors_by_panel(rows, kind):
         ax.yaxis.set_major_formatter(PERCENT)
         ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: ""))
         ax.set_ylabel(f"{sym}: error")
-        ax.axhline(10, color="#9a9a93", lw=0.8, ls="--")
-        style(ax)
+        ax.axhline(10, color=style.PALETTE["grey"], lw=0.8, ls="--")
+        tidy(ax)
     axes[-1].set_xticks(range(len(panels)))
     axes[-1].set_xticklabels(panels, rotation=25, ha="right", fontsize=9)
     axes[0].legend(frameon=False, fontsize=9, loc="upper left", bbox_to_anchor=(1.0, 1.0))
     axes[0].set_title(f"Parameter error across seeds - {'ODE' if kind == 'ode' else 'Gillespie'} cell "
                       "(dashed: 10%)", loc="left")
     fig.tight_layout()
-    fig.savefig(OUT / f"errors_{kind}.png", dpi=120)
+    fig.savefig(OUT / f"errors_{kind}.png")
     plt.close(fig)
 
 
 def save(fig, name):
     for ext in ("png", "pdf", "svg"):
-        fig.savefig(OUT / f"{name}.{ext}", dpi=200, transparent=True)
+        fig.savefig(OUT / f"{name}.{ext}")
     plt.close(fig)
 
 
@@ -146,7 +144,7 @@ def grouped(ax, groups, methods, values):
         for m in methods:
             x = g + (METHOD_ORDER.index(m) - (len(METHOD_ORDER) - 1) / 2) * width
             if m in NOT_RUN:  # no result: a gray band over the whole slot with a big cross on it
-                ax.axvspan(x - width * 0.5, x + width * 0.5, color="#e3e3e3", zorder=0)
+                ax.axvspan(x - width * 0.5, x + width * 0.5, color=style.PALETTE["neutral"], zorder=0)
                 ax.plot([x], [0.5], transform=ax.get_xaxis_transform(), marker="x", ms=13, mew=3,
                         color=METHOD_COLOUR[m])
                 continue
@@ -165,7 +163,6 @@ def grouped(ax, groups, methods, values):
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
     ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _: ""))
     ax.tick_params(axis="y", labelsize=13)
-    ax.grid(axis="y", color="black", lw=0.4, alpha=0.35)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)

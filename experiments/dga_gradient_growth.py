@@ -1,6 +1,6 @@
 """How large do differentiable-Gillespie gradients get as the time window grows?
 
-    python experiments/dga_gradient_growth.py     -> run_results/figures/dga_gradients.png
+    python experiments/dga_gradient_growth.py [--replot]     -> run_results/figures/dga_gradients.png
 
 Differentiable Gillespie (Rijal & Mehta 2025, 1/a = 200, 1/b = 20) on the
 three-reporter repressilator (Box 1 parameters, all reporters present):
@@ -10,11 +10,13 @@ system sizes. The same derivative of the ODE, for comparison, stays O(1-100).
 
 import json
 import math
+import sys
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import style  # noqa: F401  (applies the figure style)
 import torch
 
 from differentiable_cell import reporters as R
@@ -57,27 +59,29 @@ def ode_gradient(window: float) -> float:
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    rows = {f"omega={o:g}": [dga_gradient(o, w) for w in WINDOWS] for o in OMEGAS}
-    rows["ODE (per unit omega)"] = [ode_gradient(w) for w in WINDOWS]
-    for k, v in rows.items():
-        print(k, [f"{g:.2e}" for g in v], flush=True)
-    (OUT / "dga_gradients.json").write_text(json.dumps({"windows": WINDOWS, **rows}, indent=2))
+    cached = OUT / "dga_gradients.json"
+    if "--replot" in sys.argv and cached.exists():  # restyle without recomputing
+        rows = {k: v for k, v in json.loads(cached.read_text()).items() if k != "windows"}
+    else:
+        rows = {f"omega={o:g}": [dga_gradient(o, w) for w in WINDOWS] for o in OMEGAS}
+        rows["ODE (per unit omega)"] = [ode_gradient(w) for w in WINDOWS]
+        for k, v in rows.items():
+            print(k, [f"{g:.2e}" for g in v], flush=True)
+        cached.write_text(json.dumps({"windows": WINDOWS, **rows}, indent=2))
 
     fig, ax = plt.subplots(figsize=(7, 4.2))
     minutes = [w * R.TAU_M_MIN for w in WINDOWS]
-    for (k, v), colour in zip(rows.items(), ("#2a78d6", "#eb6834", "#9a9a93")):
-        ax.plot(minutes, v, marker="o", lw=2, color=colour, label=k if "ODE" in k else f"DGA, {k}")
+    for (k, v), colour in zip(rows.items(), (style.PALETTE["blue_main"], style.PALETTE["red_strong"], style.PALETTE["grey"])):
+        ax.plot(minutes, v, marker="o", lw=2, color=colour,
+                label="ODE (per unit Ω)" if "ODE" in k else f"DGA, Ω = {k.split('=')[1]}")
     ax.set_yscale("log")
     ax.set_xlabel("simulated window [min]  (one period ~ 120 min)")
     ax.set_ylabel("|d mean state / d log α|")
-    ax.set_title("Differentiable-Gillespie gradients explode with the window", loc="left")
-    ax.grid(color="#e6e6e1", lw=0.6)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    ax.legend(frameon=False)
+    ax.legend()
     fig.tight_layout()
-    fig.savefig(OUT / "dga_gradients.png", dpi=130)
-    print(OUT / "dga_gradients.png")
+    for ext in ("png", "pdf"):
+        fig.savefig(OUT / f"dga_gradients.{ext}")
+    print(OUT / "dga_gradients.pdf")
 
 
 if __name__ == "__main__":

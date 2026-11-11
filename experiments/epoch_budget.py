@@ -7,7 +7,9 @@
 
 Curricula (fit.fit_gradient): stages 25/50/100%; linear 10% -> 100% over training; ramp hold 10% for the
 first 10% of epochs, rise to 100% at 75%; ramp90 the same, reaching 100% at 90%; ramp90_coupled:
-ramp90 with lr constant while the window grows, then a cosine anneal over the final full-record epochs.
+ramp90 with lr constant while the window grows, then a cosine anneal over the final full-record epochs (the fit
+used); none_coupled / none_cosine: no curriculum (whole record throughout) with the coupled lr shape (held,
+annealed over the final 10%) or a cosine over all of training; cms10 / cms67: curriculum multiple shooting (fit.fit_cms) with 10% / 67% of the epochs in its last stage.
 Cell: 3 reporters, Gillespie, seed 0 (10 h). Reference: the benchmark's fit of the same cell (64 restarts,
 1500 epochs, staged curriculum). Reports the fit (MSE / MSE at the true parameters), the NRMSE to the hidden
 trajectory, alpha / n / beta errors, how many restarts end within 5% of the best, and wall time.
@@ -35,10 +37,25 @@ def run(epochs: int, curriculum: str = "linear", which=CELL, restarts: int = RES
     t0 = time.perf_counter()
     variants = {"stages": {}, "linear": {"curriculum": "linear"}, "ramp": {"curriculum": "ramp", "ramp": (0.1, 0.75)},
                 "ramp90": {"curriculum": "ramp", "ramp": (0.1, 0.9)},
-                "ramp90_coupled": {"curriculum": "ramp", "ramp": (0.1, 0.9), "schedule": "coupled"}}
-    settings = {k: v for k, v in V1_SETTINGS.items() if k not in ("restarts", "epochs")} | variants[curriculum]
-    thetas, final = fit_gradient(problem, restarts=restarts, epochs=epochs, seed=which[2], return_all=True,
-                                 **settings)
+                "ramp90_coupled": {"curriculum": "ramp", "ramp": (0.1, 0.9), "schedule": "coupled"},
+                "clamp": {"curriculum": "ramp", "ramp": (0.1, 0.9), "schedule": "coupled", "box": "clamp"},
+                "unit": {"curriculum": "ramp", "ramp": (0.1, 0.9), "schedule": "coupled", "box": "unit",
+                         "lr": 0.0125, "lr_final": 6.25e-5},  # the sigmoid's step at the box centre
+                "unit32": {"curriculum": "ramp", "ramp": (0.1, 0.9), "schedule": "coupled", "box": "unit",
+                           "dtype": torch.float32},  # the default since v5
+                "mse32": {"curriculum": "ramp", "ramp": (0.1, 0.9), "schedule": "coupled", "box": "unit",
+                          "dtype": torch.float32, "loss": "mse"},
+                "none_coupled": {"curriculum": "none", "schedule": "coupled"},  # no curriculum, our lr shape
+                "none_cosine": {"curriculum": "none", "schedule": "cosine"}}  # no curriculum, plain cosine
+    if curriculum.startswith("cms"):  # curriculum multiple shooting; cms10 / cms67: % of epochs in the last stage
+        from differentiable_cell.fit import fit_cms
+
+        thetas, final = fit_cms(problem, restarts=restarts, epochs=epochs, seed=which[2], return_all=True,
+                                final_fraction=int(curriculum[3:]) / 100)
+    else:
+        settings = {k: v for k, v in V1_SETTINGS.items() if k not in ("restarts", "epochs")} | variants[curriculum]
+        thetas, final = fit_gradient(problem, restarts=restarts, epochs=epochs, seed=which[2], return_all=True,
+                                     **settings)
     wall = time.perf_counter() - t0
     best = int(final.argmin())
     theta = thetas[best]
@@ -104,7 +121,7 @@ def grid(epochs: list[int], restarts: list[int], curriculum: str) -> None:
 
     jobs = [["--one", str(e), curriculum, *map(str, w), str(r)] for r in restarts for e in epochs for w in CELLS
             if not cell_file(e, curriculum, w, r).exists()]
-    run_pool(__file__, jobs, 6, OUT / "log.txt")
+    run_pool(__file__, jobs, 4, OUT / "log.txt")
     print(f"{curriculum}; gap = fit / first benchmark's fit (64 x 1500, staged) - 1, over {len(CELLS)} cells")
     print("restarts epochs | median gap | worst gap | within 2% | ODE at optimum (worst) | near best | min/fit")
     for r in restarts:
@@ -125,7 +142,7 @@ def main() -> None:
         if sys.argv[1] == "--cells-report":
             return cells_report(epochs, curricula)
         jobs = [["--one", str(epochs), c, *map(str, w)] for w in CELLS for c in curricula if not cell_file(epochs, c, w).exists()]
-        run_pool(__file__, jobs, 6, OUT / "log.txt")
+        run_pool(__file__, jobs, 4, OUT / "log.txt")
         return cells_report(epochs, curricula)
     if sys.argv[1] == "--one":
         setup_torch(1)

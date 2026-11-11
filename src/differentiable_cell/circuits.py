@@ -1,10 +1,7 @@
-"""Other gene circuits, for testing the backprop fit beyond the repressilator.
+"""The four further circuits and the dilution-only repressilator (paper Sec. "Circuits, simulation and imaging").
 
-A ``Circuit`` is a vector field ``rhs(t, y, p)`` over named species, parameters with true values and prior
-boxes, a known inducer schedule inside ``rhs``, the observed species, and how a cell starts. ``CircuitProblem``
-has the interface of ``fit.Problem``, so ``fit.fit_gradient`` and the Fisher bound work unchanged: unknowns are
-the log parameters and the log starting state (observed species boxed to their first frame +- 10% of range).
-Synthetic cells: dopri5 at tight tolerance, 5-min frames, Gaussian noise of ``noise`` x the channel's range.
+A ``Circuit`` is a vector field with true parameters, prior boxes and observed species; ``CircuitProblem`` gives it
+the interface of ``fit.Problem``, so every estimator runs on it unchanged.
 """
 
 import math
@@ -126,7 +123,7 @@ class CircuitProblem:
         traj = solve(lambda s, y: self.c.rhs(s, y, p), y0, t)  # (G, ..., S)
         return traj[..., self.observed_state].movedim(0, -2)
 
-    def loss(self, theta, n_frames=None, kind: str = "mse"):
+    def loss(self, theta, n_frames=None, kind: str = "mse"):  # paper Eq. (5)
         y = self.y if n_frames is None else self.y[:n_frames]
         r = (self.predict(theta, n_frames) - y) / self.range
         if kind == "huber":

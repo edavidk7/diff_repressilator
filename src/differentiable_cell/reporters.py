@@ -1,37 +1,12 @@
-"""The repressilator with three transcriptional reporters.
-
-Circuit (Box 1 of Elowitz & Leibler 2000). Gene i is repressed by protein j:
-
-    dm_i/dt = -m_i + alpha / (1 + (p_j / K_j)^n) + alpha_0
-    dp_i/dt = -beta (p_i - m_i)
-
-    lacI is repressed by CI, tetR by LacI, cI by TetR.
-
-Three reporters on one p15A plasmid. Each is a copy of one circuit promoter
-driving a tagged fluorescent protein, which is made dark (D) and matures into
-the fluorescent form (F):
-
-    dr/dt = -r + a / (1 + (p_j / K_j)^n) + a_0     reporter mRNA
-    dD/dt = delta * r - (k + delta) * D             dark protein
-    dF/dt = k * D - delta * F                       fluorescent protein
+"""The repressilator with three transcriptional reporters: paper Eqs. (1)-(4).
 
     reporter  promoter  repressor  protein      maturation  tag (half-life)
     lac       P_Llac    LacI       mJuniper     1.7 min     LVA (40 min)
     tet       P_Ltet    TetR       GFPmut3      4.1 min     AAV (60 min)
     cI        P_R       CI         mScarlet-I3  2.0 min     LVA (40 min)
 
-Titration: a reporter's operator sites soak up its repressor. This is an
-effective shift of that repressor's threshold, K_j = 1 + tau_j, applied only
-when reporter j is present, and to every promoter the repressor controls.
-
-Units: time in mRNA lifetimes (2.885 min); protein in units of K_M.
-
-State (15 species):
-    0-2   m_lacI, m_tetR, m_cI
-    3-5   p_LacI, p_TetR, p_CI
-    6-8   lac reporter  r, D, F
-    9-11  tet reporter  r, D, F
-    12-14 cI reporter   r, D, F
+Units: time in mRNA lifetimes (2.885 min), protein in units of K_M.
+State (15): m_lacI, m_tetR, m_cI | p_LacI, p_TetR, p_CI | (r, D, F) of the lac, tet and cI reporters.
 """
 
 import math
@@ -64,33 +39,29 @@ F_IDX = [8, 11, 14]
 
 
 def repression(y: torch.Tensor, p: dict, present: torch.Tensor) -> torch.Tensor:
-    """1 / (1 + (p/K)^n) for each repressor protein (LacI, TetR, CI), ``(..., 3)``."""
-    K = 1.0 + p["tau"] * present
+    """Hill term 1 / (1 + (p_j / K_j)^n) of Eqs. (1) and (3), per repressor (LacI, TetR, CI)."""
+    K = 1.0 + p["tau"] * present  # titration: K_j = 1 + tau_j if reporter j is built
     protein = y[..., P_IDX].clamp_min(0.0)
     return 1.0 / (1.0 + (protein / K) ** p["n"].unsqueeze(-1))
 
 
 def rhs(y: torch.Tensor, p: dict, present: torch.Tensor) -> torch.Tensor:
-    """d(state)/dt ``(..., 15)``. ``p``: ``alpha, alpha_0, n, beta`` (scalars or batches) and per-reporter
-    3-vectors ``a, a_0, tau``; ``present``: 0/1 per reporter (only built reporters titrate)."""
+    """d(state)/dt ``(..., 15)``; ``p`` holds alpha, alpha_0, n, beta and per-reporter a, a_0, tau."""
     h = repression(y, p, present)
     alpha, alpha_0 = p["alpha"].unsqueeze(-1), p["alpha_0"].unsqueeze(-1)
     beta = p["beta"].unsqueeze(-1)
     k, delta = K_MAT.to(y), DELTA.to(y)
 
     m, prot = y[..., M_IDX], y[..., P_IDX]
-    dm = -m + alpha * h[..., GENE_REPRESSOR] + alpha_0
-    dp = -beta * (prot - m)
+    dm = -m + alpha * h[..., GENE_REPRESSOR] + alpha_0  # Eq. (1)
+    dp = -beta * (prot - m)  # Eq. (2)
 
     r, D, F = y[..., R_IDX], y[..., D_IDX], y[..., F_IDX]
-    dr = -r + p["a"] * h[..., REPORTER_REPRESSOR] + p["a_0"]
-    dD = delta * r - (k + delta) * D
-    dF = k * D - delta * F
+    dr = -r + p["a"] * h[..., REPORTER_REPRESSOR] + p["a_0"]  # Eq. (3)
+    dD = delta * r - (k + delta) * D  # Eq. (4), dark protein
+    dF = k * D - delta * F  # Eq. (4), mature protein: what the camera sees
 
-    out = torch.empty_like(y)
-    out[..., M_IDX], out[..., P_IDX] = dm, dp
-    out[..., R_IDX], out[..., D_IDX], out[..., F_IDX] = dr, dD, dF
-    return out
+    return torch.cat([dm, dp, torch.stack([dr, dD, dF], -1).flatten(-2)], -1)  # the state layout above
 
 
 # The same model as a reaction network in molecule counts (for Gillespie). omega = K_M in molecules.

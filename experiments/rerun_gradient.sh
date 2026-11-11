@@ -1,10 +1,26 @@
 #!/usr/bin/env bash
 # Rerun every result that depends on the backprop fit with the current defaults (the first version is in *_v1).
-# Resumable: each step skips fits already on disk.
+#   experiments/rerun_gradient.sh [workers] [archive tag]
+# With a tag (e.g. v4), the current results are first moved aside under that tag, once. Resumable: each step skips
+# fits already on disk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 W=${1:-8}
+TAG=${2:-}
 run() { uv run python "$@"; }
+export PYTHONWARNINGS=ignore
+
+archive() {  # archive <folder holding the current results> <glob> <destination>
+    if [ -n "$TAG" ] && [ ! -e "$3" ] && ls $1/$2 >/dev/null 2>&1; then mkdir -p "$3" && mv $1/$2 "$3"/; fi
+}
+R=run_results
+archive $R/panel_benchmark/gradient "*.json" $R/panel_benchmark/gradient_$TAG
+archive $R/panel_benchmark/laplace "*.json" $R/panel_benchmark/laplace_$TAG
+archive $R/circuits/gradient "*.json" $R/circuits/gradient_$TAG
+archive $R/real_repressilator "fit_*.json" $R/real_repressilator/gradient_$TAG
+archive $R/real_improved "fit_*.json" $R/real_improved/gradient_$TAG
+archive $R/restart_spread "*.json" $R/restart_spread/$TAG
+archive $R/fit_controls/refine/gradient "*.json" $R/fit_controls/refine/gradient_$TAG
 
 # the benchmark: exactly the cells of the first version (gradient and Laplace)
 run - "$W" <<'EOF'

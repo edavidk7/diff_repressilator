@@ -1,11 +1,15 @@
-"""Solver-free estimators: MAGI and an inverse PINN. Neither integrates the ODE.
+"""Baselines that never integrate the ODE: MAGI (Yang, Wong & Kou 2021) and an inverse PINN (Casajuana et al. 2026).
 
-Both model each species (six circuit, plus r, D, F per built reporter) as a smooth curve and enforce the
-ODE as a residual (works for the repressilator ``fit.Problem`` and for ``circuits.CircuitProblem``). MAGI (Yang, Wong & Kou 2021): a Matern-5/2 GP per species on the frames refined
-``refine`` times, hyperparameters of observed species by marginal likelihood, MAP by Adam, then NUTS
-preconditioned by the MAP's Hessian. PINN (Casajuana et al. 2026): a 5 x 100 sine network t -> species,
-loss = ODE residual + data misfit. Both return ``theta`` in the layout of ``Problem.names``, the start
-read off the fitted curves at t = 0.
+Both represent every species as a smooth curve and enforce the ODE as a residual on it. They return ``theta`` in the
+layout of ``Problem.names``, with the start read off the fitted curves at t = 0. Equation numbers in the MAGI and
+PINN sections refer to those papers. Where we depart from them:
+
+MAGI  Matern nu = 5/2 (paper: 2.01); hyperparameters by a grid over the marginal likelihood (paper: optimiser with a
+      Fourier prior on the length scale); hidden species get the median fitted length scale and a data-derived
+      variance (paper: optimised jointly with theta); noise sd fixed at its GP fit (paper: sampled); NUTS from the
+      MAP with the Hessian as metric (paper: HMC); posterior median (paper: mean); curves floored at 1e-9 in f.
+PINN  no separate initial-condition term (the start is unknown here; the data term covers frame 0); residuals
+      divided by a per-species scale; 20000 Adam steps (paper: 3000-5000), cosine lr, best of 3 restarts.
 """
 
 import math
@@ -28,8 +32,8 @@ def modelled_species(problem) -> list[int]:
 
 
 def species_scales(problem: Problem, species: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mean and sd per modelled species: observed ones from their channel; hidden reporter r, D from the
-    reporter's channel (D at ~5%); hidden circuit species from the fusions, else all channels."""
+    """Mean and sd per modelled species: observed ones from their channel, hidden ones from related channels
+    (reporter r, D from the reporter's F, D at ~5%; circuit species from the fusions, else all channels)."""
     y = problem.y
     if not isinstance(problem, Problem):  # a circuit: hidden species get the scale of all observed channels
         obs = {s: c for c, s in enumerate(problem.observed_state)}
@@ -103,7 +107,7 @@ def full_theta(problem: Problem, z_kin: torch.Tensor, x0: torch.Tensor, species:
 
 
 def matern52(t, var, ls, jitter=1e-6):
-    """Covariance C, cov(x'(s), x(t)) = dC/ds, and d2C/ds dt on the grid ``t``."""
+    """K(I, I), 'K(I, I) = dK/ds and K''(I, I) = d2K/ds dt of MAGI Eq. (6), on the grid ``t``."""
     r = t.unsqueeze(1) - t.unsqueeze(0)
     a = math.sqrt(5.0) / ls
     ar = a * r.abs()
@@ -116,7 +120,7 @@ def matern52(t, var, ls, jitter=1e-6):
 
 
 def gp_fit(t, y):
-    """Variance, length scale and noise sd of one series by marginal likelihood (grid)."""
+    """phi_1 (variance), phi_2 (length scale) and noise sd of one observed series: MAGI Eq. (7), on a grid."""
     yc = y - y.mean()
     sd, span = float(yc.std()), float(t[-1] - t[0])
     best = (-math.inf, sd**2, span / 10, 0.05 * sd)
@@ -135,13 +139,14 @@ def gp_fit(t, y):
 
 def fit_magi(problem: Problem, refine: int = 2, restarts: int = 3, map_iters: int = 30000,
              lr: float = 0.01, nuts_seconds: float = 600.0, seed: int = 0) -> tuple[torch.Tensor, dict]:
-    """MAGI: MAP over (trajectories, parameters), then NUTS. Returns ``theta`` (posterior median)."""
+    """MAP of MAGI's tempered posterior over (curves, parameters), then NUTS; returns the posterior median."""
     g = torch.Generator().manual_seed(seed)
     species = modelled_species(problem)
     obs_rows = [species.index(s) for s in problem.observed_state]
     t_obs = problem.t
+    # discretisation set I: the frames refined ``refine`` times
     t = torch.linspace(float(t_obs[0]), float(t_obs[-1]), (t_obs.numel() - 1) * refine + 1, dtype=torch.float64)
-    mean, sd = species_scales(problem, species)
+    mean, sd = species_scales(problem, species)  # mu_d (constant) and the scale of each curve
 
     noise = torch.zeros(len(obs_rows), dtype=torch.float64)
     hyper = [(float(sd[k]) ** 2, float(t[-1] - t[0]) / 10) for k in range(len(species))]
@@ -153,7 +158,7 @@ def fit_magi(problem: Problem, refine: int = 2, restarts: int = 3, map_iters: in
     median_ls = sorted(fitted_ls)[len(fitted_ls) // 2]
     hyper = [(v, ls if k in obs_rows else median_ls) for k, (v, ls) in enumerate(hyper)]
 
-    Cinv, M, Kinv = [], [], []
+    Cinv, M, Kinv = [], [], []  # Eq. (6): C_d^-1, m_d = 'K C^-1, K_d^-1 with K_d = K'' - 'K C^-1 K'
     for var, ls in hyper:
         c, dc, ddc = matern52(t, var, ls)
         ci = torch.linalg.inv(c)
@@ -161,21 +166,21 @@ def fit_magi(problem: Problem, refine: int = 2, restarts: int = 3, map_iters: in
         kd = ddc - m @ dc.T
         Cinv.append(ci); M.append(m); Kinv.append(torch.linalg.inv(0.5 * (kd + kd.T)))
     Cinv, M, Kinv = torch.stack(Cinv), torch.stack(M), torch.stack(Kinv)
-    temperature = t.numel() * len(species) / problem.y.numel()
+    temperature = t.numel() * len(species) / problem.y.numel()  # beta = D |I| / N ("Prior tempering")
     n_kin = len(kinetic_index(problem))
 
-    def log_post(w):  # w = [x / sd (flattened, species-major), z_kin]
+    def log_post(w):  # tempered Eq. (5); w = [x / sd (flattened, species-major), z_kin]
         x = w[: -n_kin].reshape(len(species), t.numel()) * sd.unsqueeze(-1)
         z = w[-n_kin:]
         xc = x - mean.unsqueeze(-1)
         f = rhs_on(problem, species, t, x.T.clamp_min(1e-9), params_from_z(problem, z)).T  # > 0: d(0^n)/dn is NaN
-        dev = f - torch.einsum("snm,sm->sn", M, xc)
-        gp = torch.einsum("sn,snm,sm->", xc, Cinv, xc) + torch.einsum("sn,snm,sm->", dev, Kinv, dev)
-        data = (((x[obs_rows][:, ::refine].T - problem.y) / noise) ** 2).sum()
-        prior = (nn.functional.logsigmoid(z) + nn.functional.logsigmoid(-z)).sum()
+        dev = f - torch.einsum("snm,sm->sn", M, xc)  # f - m_d (x - mu); mu' = 0
+        gp = torch.einsum("sn,snm,sm->", xc, Cinv, xc) + torch.einsum("sn,snm,sm->", dev, Kinv, dev)  # terms (1), (3)
+        data = (((x[obs_rows][:, ::refine].T - problem.y) / noise) ** 2).sum()  # term (2)
+        prior = (nn.functional.logsigmoid(z) + nn.functional.logsigmoid(-z)).sum()  # uniform on the log box
         return -0.5 * gp / temperature - 0.5 * data + prior
 
-    def initial():
+    def initial():  # observed curves: linear interpolation of the frames (as in MAGI); hidden: their mean
         x = mean.unsqueeze(-1).expand(len(species), t.numel()).clone()
         for c, row in enumerate(obs_rows):
             x[row] = torch.from_numpy(__import__("numpy").interp(t.numpy(), t_obs.numpy(), problem.y[:, c].numpy()))
@@ -252,8 +257,9 @@ def _network(out: int, width: int = 100, depth: int = 5) -> nn.Sequential:
 
 
 def fit_pinn(problem: Problem, restarts: int = 3, iterations: int = 20000, lr: float = 1e-3,
-             n_colloc: int = 512, t_scale: float = 10.0, seed: int = 0) -> tuple[torch.Tensor, dict]:
-    """Inverse PINN; the restart with the lowest final loss wins. Returns ``theta``."""
+             n_colloc: int = 512, t_scale: float = 10.0, seed: int = 0, causal: bool = False,
+             bins: int = 32) -> tuple[torch.Tensor, dict]:
+    """Inverse PINN (5 x 100 sine units, softplus output, Adam); the restart with the lowest final loss wins."""
     species = modelled_species(problem)
     obs_rows = [species.index(s) for s in problem.observed_state]
     _, sd = species_scales(problem, species)
@@ -270,10 +276,20 @@ def fit_pinn(problem: Problem, restarts: int = 3, iterations: int = 20000, lr: f
         opt = torch.optim.Adam([{"params": net.parameters()}, {"params": [z]}], lr=lr)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=iterations, eta_min=lr / 10)
         states = lambda tt: nn.functional.softplus(net((tt / t_scale).unsqueeze(-1))) * scale
-        for _ in range(iterations):
+        for it in range(iterations):
             tc = t0 + (t1 - t0) * torch.rand(n_colloc, generator=g, dtype=torch.float64)
             u, du = torch.func.jvp(states, (tc,), (torch.ones_like(tc),))
-            residual = ((du - rhs_on(problem, species, tc, u, params_from_z(problem, z))) / scale).pow(2).mean()
+            # PINN Eq. (4) with lambda_f = lambda_y = 1: ODE residual r of Eq. (3) at collocation points + data misfit
+            residual = ((du - rhs_on(problem, species, tc, u, params_from_z(problem, z))) / scale).pow(2)
+            if causal:  # Wang et al. 2022, Eq. (12)-(14): a time bin counts only once the earlier ones are solved
+                which = ((tc - t0) / (t1 - t0) * bins).long().clamp_max(bins - 1)
+                count = torch.zeros(bins, dtype=torch.float64).index_add_(0, which, torch.ones_like(tc))
+                per_bin = torch.zeros(bins, dtype=torch.float64).index_add_(0, which, residual.mean(-1)) / count.clamp_min(1)
+                eps = 10.0 ** (-2 + min(4 * it // iterations, 4))  # causality parameter annealed 1e-2 ... 1e2
+                weight = torch.exp(-eps * (per_bin.cumsum(0) - per_bin)).detach()
+                residual = (weight * per_bin).sum() / (count > 0).sum()
+            else:
+                residual = residual.mean()
             misfit = ((states(t_obs)[:, obs_rows] - problem.y) / obs_scale).pow(2).mean()
             loss = residual + misfit
             opt.zero_grad()

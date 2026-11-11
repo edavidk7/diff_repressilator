@@ -38,7 +38,8 @@ def run_one(name: str, kind: str, seed: int, epochs: int, lr_final: float) -> No
     truth = true_theta(problem, data).clamp(problem.lo, problem.hi)
     t0 = time.perf_counter()
     history: list = []
-    thetas, final = fit_gradient(problem, epochs=epochs, lr_final=lr_final, seed=seed, return_all=True,
+    thetas, final = fit_gradient(problem, epochs=epochs, seed=seed, return_all=True,
+                                 lr_final=None if lr_final == 2.5e-4 else lr_final,  # None: the fit's default
                                  history=history, **GRADIENT_SETTINGS)
     mse_truth, true = float(problem.loss(truth)), problem.values(truth)
 

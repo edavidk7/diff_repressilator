@@ -1,11 +1,10 @@
-"""The inverse problem and its fit by backpropagation through the ODE solver.
+"""Our estimator: backpropagation through the ODE solver (paper Sec. "Method").
 
-Unknowns ``theta`` are log values on a box (names in ``Problem.names``): the circuit (alpha, alpha_0, n,
-beta), each built reporter's strength and leak (a, a_0), and the full starting state. Observed species
-start within +-10% of the channel's range around their first frame; hidden ones are free. Titration
-(``tau``) is known from the plasmid design.
+``Problem`` is the repressilator inverse problem, ``fit_gradient`` the estimator. Unknowns ``theta`` are logs on a
+box: alpha, alpha_0, n, beta, each built reporter's (a, a_0), and the starting value of every species.
 """
 
+import copy
 import math
 from dataclasses import dataclass
 
@@ -23,9 +22,7 @@ CIRCUIT_BOX = {
 }
 CIRCUIT_START_BOX = (1e-3, 1000.0)
 CIRCUIT_SPECIES = ["m_lacI", "m_tetR", "m_cI", "p_LacI", "p_TetR", "p_CI"]
-# Fixed-step RK4 for fitting (~5 steps per frame); data come from tight dopri5, so the solver's own error
-# is not fitted.
-RK4_STEP = 0.35
+RK4_STEP = 0.35  # ~5 steps per frame; the data come from tight dopri5, so solver error is not fitted
 
 
 def solve(f, y0, t):
@@ -110,7 +107,7 @@ class Problem:
         return p, torch.stack(start, dim=-1)
 
     def predict(self, theta, n_frames=None, t=None):
-        """Observed channels ``(..., G, k)`` at the first ``n_frames`` frames, or at times ``t``."""
+        """y_hat = h(x(t_g)): observed channels ``(..., G, k)`` at the first ``n_frames`` frames, or at ``t``."""
         p, y0 = self.params_and_start(theta)
         if t is None:
             t = self.t if n_frames is None else self.t[:n_frames]
@@ -118,10 +115,9 @@ class Problem:
         return traj[..., self.observed_state].movedim(0, -2)
 
     def loss(self, theta, n_frames=None, kind: str = "mse"):
-        """Mean over frames and channels of a loss on residuals divided by the channel's range.
-        ``kind``: "mse", "l1" or "huber" (quadratic below 0.05, a few noise levels)."""
+        """Eq. (5) on the first ``n_frames`` frames; ``kind`` is the penalty rho ("huber": delta = 0.05)."""
         y = self.y if n_frames is None else self.y[:n_frames]
-        r = (self.predict(theta, n_frames) - y) / self.range
+        r = (self.predict(theta, n_frames) - y) / self.range  # range-normalised residual
         if kind == "mse":
             per_point = r**2
         elif kind == "l1":
@@ -133,42 +129,69 @@ class Problem:
         return per_point.mean((-1, -2))
 
 
-def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: float = 0.05,
-                 lr_final: float = 2.5e-4, stages=(0.25, 0.5, 1.0), curriculum: str = "ramp",
+def _cast(obj, dtype):
+    """A shallow copy of a problem with its floating tensors (and those of nested objects) in ``dtype``."""
+    out = copy.copy(obj)
+    for k, v in vars(obj).items():
+        if torch.is_tensor(v) and v.is_floating_point():
+            setattr(out, k, v.to(dtype))
+        elif hasattr(v, "__dict__") and not callable(v) and any(torch.is_tensor(x) for x in vars(v).values()):
+            setattr(out, k, _cast(v, dtype))
+    return out
+
+
+def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: float | None = None,
+                 lr_final: float | None = None, stages=(0.25, 0.5, 1.0), curriculum: str = "ramp",
                  start_fraction: float = 0.1, ramp=(0.1, 0.9), seed: int = 0, loss: str = "huber",
                  optimizer: str = "adam", schedule: str = "coupled", return_all: bool = False,
-                 history: list | None = None, history_every: int = 25):
-    """Backpropagation through the solver from ``restarts`` prior draws, optimised as one batch.
+                 history: list | None = None, history_every: int = 25, box: str = "unit",
+                 dtype=torch.float32):
+    """Minimise Eq. (5) from ``restarts`` prior draws as one batch; returns the best restart's theta and all MSEs.
 
-    The loss first sees part of the record (a period error grows into a phase error that flattens the loss):
-    "ramp" (default) holds ``start_fraction`` for the first ``ramp[0]`` of training and reaches the whole record
-    at ``ramp[1]``; "linear" grows from the first epoch to the last; "stages" uses the fractions ``stages`` in
-    equal thirds. ``schedule``: "coupled" (default) keeps ``lr`` while the window grows, then anneals (cosine)
-    to ``lr_final`` on the whole record; "cosine" and "exp" decay over all of training. The best restart is
-    chosen by full-record MSE. Returns its theta (every restart's with ``return_all``) and every restart's
-    final MSE; ``history`` collects ``(epoch, MSE per restart, theta per restart)`` every ``history_every``.
+    ``curriculum``: how the loss window G' grows ("ramp", ours; "linear"; "stages"; "none" = ablation).
+    ``schedule``: "coupled" (ours) holds ``lr`` until the window is whole, then anneals; "cosine" / "exp" decay throughout.
+    ``loss``: the penalty rho of Eq. (5), "huber" or "mse" (also "l1").
+    ``box``: "unit" (ours) optimises each unknown's position in its box, in [0, 1], and clips to it; "sigmoid" maps
+    an unconstrained z onto the box; "clamp" clips the log values. ``lr`` defaults to 0.0125 for "unit" (the sigmoid's
+    step at the box centre) and 0.05 otherwise, ``lr_final`` to ``lr`` / 200. The fit runs in ``dtype``; the best
+    restart is chosen, and theta returned, in double precision.
     """
     g = torch.Generator().manual_seed(seed)
-    z = problem.to_z(problem.sample_prior(restarts, g)).requires_grad_(True)
+    lr = lr if lr is not None else (0.0125 if box == "unit" else 0.05)
+    lr_final = lr_final if lr_final is not None else lr / 200
+    exact, start = problem, problem.sample_prior(restarts, g)  # the prior draws, in double precision
+    problem = _cast(problem, dtype)
+    if box == "clamp":  # z is theta itself
+        to_theta, z = (lambda v: v), start.to(dtype).requires_grad_(True)
+    elif box == "unit":  # z is the position in the box, in [0, 1]
+        to_theta = lambda v: problem.lo + v * (problem.hi - problem.lo)
+        z = ((start - exact.lo) / (exact.hi - exact.lo)).to(dtype).requires_grad_(True)
+    else:
+        to_theta, z = problem.from_z, exact.to_z(start).to(dtype).requires_grad_(True)
     opt = {"adam": lambda: torch.optim.Adam([z], lr=lr),
            "rmsprop": lambda: torch.optim.RMSprop([z], lr=lr),
            "sgd": lambda: torch.optim.SGD([z], lr=lr, momentum=0.9, nesterov=True)}[optimizer]()
     G = problem.t.numel()
-    if curriculum in ("linear", "ramp"):  # frames the loss sees, per epoch
+    # --- window G' of Eq. (5), per epoch
+    if curriculum in ("linear", "ramp"):
         a, b = (0.0, 1.0) if curriculum == "linear" else ramp
         progress = lambda e: min(max((e / max(epochs - 1, 1) - a) / (b - a), 0.0), 1.0)
         window = [max(4, math.ceil((start_fraction + (1 - start_fraction) * progress(e)) * G)) for e in range(epochs)]
+    elif curriculum == "none":  # the whole record from the first epoch (ablation)
+        window = [G] * epochs
     elif curriculum == "stages":
         steps = [max(4, math.ceil(f * G)) for f in stages]
         window = [steps[e * len(steps) // epochs] for e in range(epochs)]
     else:
         raise ValueError(f"curriculum {curriculum!r}")
+    # --- learning rate
     if schedule == "exp":
         sched = torch.optim.lr_scheduler.ExponentialLR(opt, (lr_final / lr) ** (1.0 / max(epochs - 1, 1)))
     elif schedule == "cosine":
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs, eta_min=lr_final)
     elif schedule == "coupled":
-        full = next(e for e in range(epochs) if window[e] >= G)
+        # anneal once the window is whole; without a curriculum, at ramp[1] as in the default
+        full = round(ramp[1] * epochs) if curriculum == "none" else next(e for e in range(epochs) if window[e] >= G)
         r = lr_final / lr
         sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda e: 1.0 if e < full else
                                                   r + (1 - r) * 0.5 * (1 + math.cos(math.pi * (e - full) / max(epochs - full, 1))))
@@ -177,31 +200,39 @@ def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: fl
 
     def full_mse():
         with torch.no_grad():
-            theta = problem.from_z(z)
+            theta = to_theta(z)
             return torch.nan_to_num(problem.loss(theta), nan=math.inf), theta.clone()
 
     for epoch in range(epochs):
         if history is not None and epoch % history_every == 0:
             history.append((epoch, *full_mse()))
         opt.zero_grad()
-        per_restart = problem.loss(problem.from_z(z), window[epoch], kind=loss)
-        # Restarts are independent; one that goes non-finite stops moving.
+        per_restart = problem.loss(to_theta(z), window[epoch], kind=loss)
+        # summing keeps the restarts' gradients independent; a non-finite restart stops moving
         torch.where(torch.isfinite(per_restart), per_restart, torch.zeros_like(per_restart)).sum().backward()
         z.grad = torch.nan_to_num(z.grad, nan=0.0, posinf=0.0, neginf=0.0)
         opt.step()
+        if box == "clamp":
+            with torch.no_grad():
+                z.copy_(torch.maximum(torch.minimum(z, problem.hi), problem.lo))
+        elif box == "unit":
+            with torch.no_grad():
+                z.clamp_(0.0, 1.0)
         sched.step()
     final, theta = full_mse()
     if history is not None:
         history.append((epochs, final, theta))
+    with torch.no_grad():  # the estimate is the restart with the lowest full-record MSE, scored in double precision
+        theta = torch.maximum(torch.minimum(theta.double(), exact.hi), exact.lo)
+        final = torch.nan_to_num(exact.loss(theta), nan=math.inf)
     if return_all:
         return theta, final
     return theta[int(final.argmin())], final
 
 
 def fit_laplace(problem: Problem, theta_map: torch.Tensor, n_draws: int = 4000, seed: int = 0):
-    """Laplace approximation at the fit: Gaussian draws ``(n_draws, dim)`` in z with the inverse Hessian of
-    the log posterior (per-channel noise from the fit's residuals, uniform prior on the box). Eigenvalues
-    are floored at the prior's curvature (0.25), so undetermined directions get prior-width spread."""
+    """Laplace approximation at the fit: Gaussian draws in z from the inverse Hessian of the log posterior
+    (eigenvalues floored at the prior's curvature, 0.25)."""
     with torch.no_grad():
         noise_var = ((problem.predict(theta_map) - problem.y) / problem.range).pow(2).mean(0)
     z_map = problem.to_z(theta_map).detach()
@@ -222,3 +253,76 @@ def fit_laplace(problem: Problem, theta_map: torch.Tensor, n_draws: int = 4000, 
     chol = evecs / evals.clamp_min(0.25).sqrt()
     eps = torch.randn(n_draws, len(z_map), generator=torch.Generator().manual_seed(seed), dtype=z_map.dtype)
     return problem.from_z(z_map + eps @ chol.T), {"negative_hessian_eigs": int((evals < 0).sum())}
+
+
+def fit_cms(problem: Problem, restarts: int = 64, epochs: int = 500, windows: int = 5, final_fraction: float = 0.1,
+            continuity: float = 1.0, lr: float = 0.05, lr_final: float = 2.5e-4, seed: int = 0, loss: str = "huber",
+            return_all: bool = False):
+    """Curriculum multiple shooting (Persson et al. 2026), not used in the paper: ``windows`` windows with their
+    own starts and a continuity penalty merge stage by stage into single shooting (the last ``final_fraction``)."""
+    G = problem.t.numel()
+    assert (G - 1) % windows == 0, "frames - 1 must be divisible by the number of windows"
+    seg = (G - 1) // windows
+    start = [i for i, n in enumerate(problem.names) if n.endswith("(0)")]
+    # window starts: the problem's start box, observed species re-centred on that window's first frame
+    lo_u = problem.lo[start].expand(windows - 1, -1).clone()
+    hi_u = problem.hi[start].expand(windows - 1, -1).clone()
+    state_of = _start_states(problem)
+    for c, state in enumerate(problem.observed_state):
+        k = state_of.index(state)
+        for w in range(1, windows):
+            y = float(problem.y[w * seg, c])
+            rng = float(problem.range[c])
+            lo_u[w - 1, k], hi_u[w - 1, k] = math.log(max(y - 0.1 * rng, 1e-3)), math.log(y + 0.1 * rng)
+    g = torch.Generator().manual_seed(seed)
+    z = problem.to_z(problem.sample_prior(restarts, g)).requires_grad_(True)
+    u0 = lo_u + torch.rand(restarts, windows - 1, len(start), generator=g, dtype=torch.float64) * (hi_u - lo_u)
+    zu = torch.logit(((u0 - lo_u) / (hi_u - lo_u)).clamp(1e-9, 1 - 1e-9)).requires_grad_(True)
+    opt = torch.optim.Adam([z, zu], lr=lr)
+    stage_epochs = [round((1 - final_fraction) * epochs / (windows - 1))] * (windows - 1)
+    stage_epochs.append(epochs - sum(stage_epochs))
+    full = epochs - stage_epochs[-1]
+    r = lr_final / lr
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda e: 1.0 if e < full else
+                                              r + (1 - r) * 0.5 * (1 + math.cos(math.pi * (e - full) / max(epochs - full, 1))))
+    t_rel = problem.t - problem.t[0]
+    for s, n_ep in enumerate(stage_epochs, start=1):
+        k, length = windows - s + 1, s * seg + 1  # windows at this stage and frames per window
+        for _ in range(n_ep):
+            theta = problem.from_z(z)
+            if k == 1:
+                per = problem.loss(theta, kind=loss)
+            else:
+                starts = torch.cat([theta[:, None, start], (lo_u + torch.sigmoid(zu) * (hi_u - lo_u))[:, :k - 1]], 1)
+                theta_w = theta[:, None, :].expand(-1, k, -1).clone()
+                theta_w[..., start] = starts
+                p, y0 = problem.params_and_start(theta_w)
+                traj = solve(lambda _t, y: R.rhs(y, p, problem.mask), y0, t_rel[:length])  # (L, B, k, 15)
+                pred = traj[..., problem.observed_state].movedim(0, -2)  # (B, k, L, C)
+                y = torch.stack([problem.y[w * seg: w * seg + length] for w in range(k)])  # (k, L, C)
+                res = (pred - y) / problem.range
+                data = torch.nn.functional.huber_loss(res, torch.zeros_like(res), reduction="none", delta=0.05)
+                log_x = torch.log(traj.clamp_min(1e-9))
+                gap = log_x[seg:, :, :-1] - log_x[: length - seg, :, 1:]  # window w at its frames >= seg vs window w+1
+                per = data.mean((-1, -2, -3)) + continuity * gap.pow(2).mean((0, 2, 3))
+            opt.zero_grad()
+            torch.where(torch.isfinite(per), per, torch.zeros_like(per)).sum().backward()
+            for v in (z, zu):
+                if v.grad is not None:
+                    v.grad = torch.nan_to_num(v.grad, nan=0.0, posinf=0.0, neginf=0.0)
+            opt.step()
+            sched.step()
+    with torch.no_grad():
+        theta = problem.from_z(z)
+        final = torch.nan_to_num(problem.loss(theta), nan=math.inf)
+    if return_all:
+        return theta, final
+    return theta[int(final.argmin())], final
+
+
+def _start_states(problem: Problem) -> list[int]:
+    """State index of each start coordinate, in ``problem.names`` order."""
+    out = list(range(6))
+    for j in problem.present:
+        out += [R.R_IDX[j], R.D_IDX[j], R.F_IDX[j]]
+    return out

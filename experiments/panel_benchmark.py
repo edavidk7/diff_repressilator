@@ -11,6 +11,7 @@ the frames, fitted trajectory and hidden truth for figures. Resumable: finished 
 """
 
 import argparse
+import os
 import json
 import statistics
 import time
@@ -25,8 +26,11 @@ OUT = RESULTS / "panel_benchmark"
 PARAMS = ("alpha", "n", "beta", "alpha_0")
 # The method's settings are fit_gradient's defaults (ramp curriculum, coupled schedule, 64 x 500; chosen on fit
 # quality, never on truth). The first benchmark used these (results in */gradient_v1, */laplace_v1):
-GRADIENT_SETTINGS: dict = {}
-V1_SETTINGS: dict = {"loss": "huber", "schedule": "cosine", "curriculum": "stages", "restarts": 64, "epochs": 1500}
+# the fit's loss: Huber by default, FIT_LOSS=mse for the squared error (the Gaussian likelihood)
+GRADIENT_SETTINGS: dict = {"loss": os.environ.get("FIT_LOSS", "huber")}
+FIDES_STARTS = 16
+V1_SETTINGS: dict = {"loss": "huber", "schedule": "cosine", "curriculum": "stages", "restarts": 64, "epochs": 1500,
+                     "box": "sigmoid", "dtype": torch.float64}
 
 
 def job_file(method: str, name: str, kind: str, seed: int):
@@ -60,6 +64,33 @@ def estimate(method: str, problem, seed: int):
     if method == "pinn":
         theta, info = fit_pinn(problem, seed=seed)
         return theta, None, info
+    if method == "abc_summary":  # ABC-SMC with a summary-statistic distance; estimate as for "abc"
+        from differentiable_cell.abc import summary_distance
+
+        particles, weights, _ = fit_abc(problem, seed=seed, distance=summary_distance(problem))
+        g = torch.Generator().manual_seed(seed)
+        best = float(problem.loss(particles).min())  # the best particle's trajectory MSE, for reference
+        return (weighted_median(particles, weights), particles[torch.multinomial(weights, 2000, True, generator=g)],
+                {"best_particle_mse": best})
+    if method == "pinn_causal":
+        theta, info = fit_pinn(problem, seed=seed, causal=True)
+        return theta, None, info
+    if method == "snpe":  # truncated sequential neural posterior estimation, 1e5 simulations; estimate = best draw
+        from differentiable_cell.neural_sbi import fit_snpe
+
+        theta, info = fit_snpe(problem, seed=seed, rounds=10, sims_per_round=10_000, max_epochs=7, threads=2)
+        info.pop("history", None)
+        return theta, info.pop("draws"), info
+    if method == "lna":  # linear-noise / Kalman likelihood, for Gillespie cells
+        from differentiable_cell.lna import fit_lna
+
+        theta, info = fit_lna(problem, seed=seed)
+        return theta, None, info
+    if method == "fides":  # multistart trust-region least squares from the first 16 of the gradient fit's starts
+        from differentiable_cell.second_order import fit_fides
+
+        theta, info = fit_fides(problem, restarts=FIDES_STARTS, maxiter=300, seed=seed)
+        return theta, None, info
     raise ValueError(method)
 
 
@@ -78,7 +109,7 @@ def run_one(method: str, name: str, kind: str, seed: int) -> None:
                "estimate": {k: float(fit[k]) for k in PARAMS}, "truth": {k: float(true[k]) for k in PARAMS},
                "rel_err": {k: abs(float(fit[k]) - float(true[k])) / float(true[k]) for k in PARAMS},
                "theta": theta.tolist(), "names": problem.names,
-               "info": {k: v for k, v in info.items() if isinstance(v, (int, float))},
+               "info": {k: v for k, v in info.items() if isinstance(v, (int, float, list))},
                "channels": [CHANNELS[c][0] for c in problem.channels],
                "t": data.t.tolist(), "y": problem.y.tolist(), "fine_t": data.fine_t.tolist(),
                "fit_fine": problem.predict(theta, t=data.fine_t).tolist(),
@@ -114,7 +145,7 @@ def report() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", default="gradient", help="comma-separated: gradient, laplace, abc, magi, pinn")
+    ap.add_argument("--method", default="gradient", help="comma-separated: gradient, laplace, abc, magi, pinn, fides")
     ap.add_argument("--seeds", type=int, default=0, help="main configurations x both kinds x this many seeds")
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--threads", type=int, default=2)

@@ -18,7 +18,7 @@ def _leapfrog(x, r, grad, eps, logp_grad: LogProb):
 
 
 def _build_tree(x, r, grad, log_u, v, j, eps, joint0, logp_grad, rng):
-    """Recursive doubling; returns the tree's edges, proposal and statistics."""
+    """BuildTree of Algorithm 6: the tree's edges, proposal and statistics."""
     if j == 0:
         x1, r1, lp1, g1 = _leapfrog(x, r, grad, v * eps, logp_grad)
         joint = lp1 - 0.5 * float(r1 @ r1)
@@ -57,11 +57,7 @@ def nuts(
     seed: int = 0,
     max_seconds: float | None = None,
 ) -> tuple[torch.Tensor, dict]:
-    """Draw ``n_samples`` after ``n_warmup`` step-size adaptation iterations from ``x0``.
-
-    ``logp_grad(x)`` returns (log density, gradient); ``max_seconds`` stops early, keeping what was drawn.
-    Returns ``(samples (N, d), diagnostics)``.
-    """
+    """``n_samples`` draws after ``n_warmup`` adaptation steps; ``max_seconds`` stops early, keeping the draws."""
     rng = torch.Generator().manual_seed(seed)
     d = x0.numel()
     x = x0.clone()
@@ -110,7 +106,7 @@ def nuts(
             s = s1 * int(float(dx @ rm) >= 0) * int(float(dx @ rp) >= 0)
             j += 1
         stat = acc / max(n_acc, 1)
-        if m <= n_warmup:
+        if m <= n_warmup:  # dual averaging of the step size
             h_bar = (1 - 1 / (m + t0)) * h_bar + (target_accept - stat) / (m + t0)
             log_eps = mu - math.sqrt(m) / gamma * h_bar
             eta = m**-kappa

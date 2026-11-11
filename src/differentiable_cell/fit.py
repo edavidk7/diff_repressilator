@@ -129,14 +129,15 @@ class Problem:
         return per_point.mean((-1, -2))
 
 
-def _cast(obj, dtype):
-    """A shallow copy of a problem with its floating tensors (and those of nested objects) in ``dtype``."""
+def _cast(obj, dtype, device=None):
+    """A shallow copy of a problem with its tensors (and those of nested objects) on ``device``, floating ones in
+    ``dtype``."""
     out = copy.copy(obj)
     for k, v in vars(obj).items():
-        if torch.is_tensor(v) and v.is_floating_point():
-            setattr(out, k, v.to(dtype))
+        if torch.is_tensor(v):
+            setattr(out, k, v.to(device=device, dtype=dtype if v.is_floating_point() else None))
         elif hasattr(v, "__dict__") and not callable(v) and any(torch.is_tensor(x) for x in vars(v).values()):
-            setattr(out, k, _cast(v, dtype))
+            setattr(out, k, _cast(v, dtype, device))
     return out
 
 
@@ -145,7 +146,7 @@ def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: fl
                  start_fraction: float = 0.1, ramp=(0.1, 0.9), seed: int = 0, loss: str = "huber",
                  optimizer: str = "adam", schedule: str = "coupled", return_all: bool = False,
                  history: list | None = None, history_every: int = 25, box: str = "unit",
-                 dtype=torch.float32):
+                 dtype=torch.float32, device=None):
     """Minimise Eq. (5) from ``restarts`` prior draws as one batch; returns the best restart's theta and all MSEs.
 
     ``curriculum``: how the loss window G' grows ("ramp", ours; "linear"; "stages"; "none" = ablation).
@@ -153,21 +154,22 @@ def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: fl
     ``loss``: the penalty rho of Eq. (5), "huber" or "mse" (also "l1").
     ``box``: "unit" (ours) optimises each unknown's position in its box, in [0, 1], and clips to it; "sigmoid" maps
     an unconstrained z onto the box; "clamp" clips the log values. ``lr`` defaults to 0.0125 for "unit" (the sigmoid's
-    step at the box centre) and 0.05 otherwise, ``lr_final`` to ``lr`` / 200. The fit runs in ``dtype``; the best
-    restart is chosen, and theta returned, in double precision.
+    step at the box centre) and 0.05 otherwise, ``lr_final`` to ``lr`` / 200. The fit runs in ``dtype`` on ``device``
+    (e.g. "cuda"); the best restart is chosen, and theta returned, in double precision on the CPU.
     """
     g = torch.Generator().manual_seed(seed)
     lr = lr if lr is not None else (0.0125 if box == "unit" else 0.05)
     lr_final = lr_final if lr_final is not None else lr / 200
     exact, start = problem, problem.sample_prior(restarts, g)  # the prior draws, in double precision
-    problem = _cast(problem, dtype)
+    problem = _cast(problem, dtype, device)
+    start = start.to(device)
     if box == "clamp":  # z is theta itself
         to_theta, z = (lambda v: v), start.to(dtype).requires_grad_(True)
     elif box == "unit":  # z is the position in the box, in [0, 1]
         to_theta = lambda v: problem.lo + v * (problem.hi - problem.lo)
-        z = ((start - exact.lo) / (exact.hi - exact.lo)).to(dtype).requires_grad_(True)
+        z = ((start - exact.lo.to(device)) / (exact.hi - exact.lo).to(device)).to(dtype).requires_grad_(True)
     else:
-        to_theta, z = problem.from_z, exact.to_z(start).to(dtype).requires_grad_(True)
+        to_theta, z = problem.from_z, exact.to_z(start.cpu()).to(device=device, dtype=dtype).requires_grad_(True)
     opt = {"adam": lambda: torch.optim.Adam([z], lr=lr),
            "rmsprop": lambda: torch.optim.RMSprop([z], lr=lr),
            "sgd": lambda: torch.optim.SGD([z], lr=lr, momentum=0.9, nesterov=True)}[optimizer]()
@@ -223,7 +225,7 @@ def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: fl
     if history is not None:
         history.append((epochs, final, theta))
     with torch.no_grad():  # the estimate is the restart with the lowest full-record MSE, scored in double precision
-        theta = torch.maximum(torch.minimum(theta.double(), exact.hi), exact.lo)
+        theta = torch.maximum(torch.minimum(theta.double().cpu(), exact.hi), exact.lo)
         final = torch.nan_to_num(exact.loss(theta), nan=math.inf)
     if return_all:
         return theta, final

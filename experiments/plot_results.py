@@ -216,6 +216,7 @@ def results_main(rows):
 
 def main():
     rows = [json.loads(p.read_text()) for p in current(IN)]
+    rows = [r for r in rows if r["method"] in METHOD_LABEL]  # the main figures show the main methods only
     OUT.mkdir(parents=True, exist_ok=True)
     timeseries(rows)
     for kind in ("ode", "ssa"):

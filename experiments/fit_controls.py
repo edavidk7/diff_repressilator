@@ -43,7 +43,7 @@ def refine(problem, theta: torch.Tensor, seed: int, epochs: int = 600, random_st
     windows = [max(4, math.ceil(f * problem.t.numel())) for f in stages]
     for epoch in range(epochs):
         opt.zero_grad()
-        per = problem.loss(problem.from_z(z), windows[epoch * len(windows) // epochs], kind="huber")
+        per = problem.loss(problem.from_z(z), windows[epoch * len(windows) // epochs], kind="mse")
         torch.where(torch.isfinite(per), per, torch.zeros_like(per)).sum().backward()
         z.grad = torch.nan_to_num(z.grad, nan=0.0, posinf=0.0, neginf=0.0).masked_fill(frozen, 0.0)
         opt.step()

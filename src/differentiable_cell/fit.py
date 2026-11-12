@@ -143,7 +143,7 @@ def _cast(obj, dtype, device=None):
 
 def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: float | None = None,
                  lr_final: float | None = None, stages=(0.25, 0.5, 1.0), curriculum: str = "ramp",
-                 start_fraction: float = 0.1, ramp=(0.1, 0.9), seed: int = 0, loss: str = "huber",
+                 start_fraction: float = 0.1, ramp=(0.1, 0.9), seed: int = 0, loss: str = "mse",
                  optimizer: str = "adam", schedule: str = "coupled", return_all: bool = False,
                  history: list | None = None, history_every: int = 25, box: str = "unit",
                  dtype=torch.float32, device=None):
@@ -151,7 +151,7 @@ def fit_gradient(problem: Problem, restarts: int = 64, epochs: int = 500, lr: fl
 
     ``curriculum``: how the loss window G' grows ("ramp", ours; "linear"; "stages"; "none" = ablation).
     ``schedule``: "coupled" (ours) holds ``lr`` until the window is whole, then anneals; "cosine" / "exp" decay throughout.
-    ``loss``: the penalty rho of Eq. (5), "huber" or "mse" (also "l1").
+    ``loss``: the penalty rho of Eq. (5): "mse" (ours), "huber" or "l1".
     ``box``: "unit" (ours) optimises each unknown's position in its box, in [0, 1], and clips to it; "sigmoid" maps
     an unconstrained z onto the box; "clamp" clips the log values. ``lr`` defaults to 0.0125 for "unit" (the sigmoid's
     step at the box centre) and 0.05 otherwise, ``lr_final`` to ``lr`` / 200. The fit runs in ``dtype`` on ``device``

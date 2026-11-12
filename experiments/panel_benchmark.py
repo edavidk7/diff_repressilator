@@ -26,8 +26,8 @@ OUT = RESULTS / "panel_benchmark"
 PARAMS = ("alpha", "n", "beta", "alpha_0")
 # The method's settings are fit_gradient's defaults (ramp curriculum, coupled schedule, 64 x 500; chosen on fit
 # quality, never on truth). The first benchmark used these (results in */gradient_v1, */laplace_v1):
-# the fit's loss: Huber by default, FIT_LOSS=mse for the squared error (the Gaussian likelihood)
-GRADIENT_SETTINGS: dict = {"loss": os.environ.get("FIT_LOSS", "huber")}
+# the fit's loss: the squared error by default, FIT_LOSS=huber for the Huber penalty
+GRADIENT_SETTINGS: dict = {"loss": os.environ.get("FIT_LOSS", "mse")}
 FIDES_STARTS = 16
 V1_SETTINGS: dict = {"loss": "huber", "schedule": "cosine", "curriculum": "stages", "restarts": 64, "epochs": 1500,
                      "box": "sigmoid", "dtype": torch.float64}
